@@ -83,6 +83,25 @@ class Manager:
         tmux.new_session(session_name, repo_path)
         return session
 
+    def adopt_session(self, session_name: str, repo_path: str, base_branch: str) -> Session:
+        """Adopt an existing tmux session into torchard's management."""
+        repo = self._get_repo_by_path(repo_path)
+        if repo is None:
+            default_branch = git.detect_default_branch(repo_path)
+            name = Path(repo_path).name
+            repo = add_repo(self._conn, Repo(path=repo_path, name=name, default_branch=default_branch))
+
+        session = add_session(
+            self._conn,
+            Session(
+                name=session_name,
+                repo_id=repo.id,
+                base_branch=base_branch,
+                created_at=_now(),
+            ),
+        )
+        return session
+
     def add_tab(self, session_id: int, branch_name: str) -> Worktree:
         """Create a worktree + tmux window for the given session."""
         session = self._get_session_by_id(session_id)

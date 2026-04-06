@@ -11,6 +11,7 @@ from textual.containers import Vertical
 from torchard.core import tmux
 from torchard.core.db import get_repos
 from torchard.core.manager import Manager
+from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
 from torchard.tui.views.new_session import NewSessionScreen
 from torchard.tui.views.new_tab import NewTabScreen
@@ -74,6 +75,7 @@ class SessionListScreen(Screen):
         Binding("n", "new_session", "New"),
         Binding("w", "new_tab", "Tab"),
         Binding("d", "delete_session", "Delete"),
+        Binding("a", "adopt", "Adopt"),
         Binding("c", "cleanup", "Cleanup"),
         Binding("question_mark", "help", "Help"),
     ]
@@ -171,6 +173,16 @@ class SessionListScreen(Screen):
         if session is None or not session["managed"]:
             return
         self.app.push_screen(NewTabScreen(self._manager, session["id"], session["name"]))
+
+    def action_adopt(self) -> None:
+        table = self.query_one(DataTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        session = self._session_for_row_key(row_key)
+        if session is None or session["managed"]:
+            return
+        self.app.push_screen(AdoptSessionScreen(self._manager, session["name"]))
 
     def action_delete_session(self) -> None:
         self.app.push_screen(PlaceholderScreen("Delete Session"))
