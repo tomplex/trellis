@@ -217,8 +217,7 @@ class SessionListScreen(Screen):
             session_name = parts[1]
             window_index = int(parts[2])
             try:
-                tmux.select_window(session_name, window_index)
-                tmux.switch_client(session_name)
+                tmux.switch_client(f"{session_name}:{window_index}")
             except tmux.TmuxError:
                 pass
             self.app.exit()
