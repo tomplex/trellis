@@ -1,0 +1,20 @@
+[project]
+name = "torchard"
+version = "0.1.0"
+description = "tmux session and worktree manager"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.80.0",
+]
+
+[project.scripts]
+torchard = "torchard.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
