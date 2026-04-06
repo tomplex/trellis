@@ -9,7 +9,7 @@ from textual.widgets import DataTable, Footer, Static
 from textual.containers import Vertical
 
 from torchard.core import tmux
-from torchard.core.db import get_repos
+from torchard.core.db import get_repos, get_worktrees_for_session
 from torchard.core.manager import Manager
 from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
@@ -25,6 +25,7 @@ _HELP_TEXT = """\
 
 [bold]Session List[/bold]
   [#00aaff]enter[/#00aaff]     Switch to session
+  [#00aaff]tab[/#00aaff]       Expand/collapse worktrees
   [#00aaff]n[/#00aaff]         New managed session
   [#00aaff]w[/#00aaff]         New worktree tab in session
   [#00aaff]d[/#00aaff]         Delete session
@@ -87,6 +88,7 @@ class SessionListScreen(Screen):
         Binding("j,down", "cursor_down", "Down", show=False),
         Binding("k,up", "cursor_up", "Up", show=False),
         Binding("enter", "select", "Switch"),
+        Binding("tab", "toggle_expand", "Expand"),
         Binding("n", "new_session", "New"),
         Binding("w", "new_tab", "Tab"),
         Binding("d", "delete_session", "Delete"),
@@ -102,6 +104,7 @@ class SessionListScreen(Screen):
         self._manager = manager
         self._sessions: list[dict] = []
         self._repos: dict = {}
+        self._expanded: set[str] = set()  # session row keys that are expanded
 
     def compose(self) -> ComposeResult:
         yield DataTable(id="session-table", cursor_type="row", zebra_stripes=False)
@@ -135,14 +138,38 @@ class SessionListScreen(Screen):
             if not session["managed"]:
                 status += " [dim]unmanaged[/dim]"
             row_key = str(session["id"]) if session["id"] is not None else f"unmanaged:{session['name']}"
+            expanded = row_key in self._expanded
+            indicator = "▾" if expanded else "▸" if session["managed"] else " "
             table.add_row(
-                session["name"],
+                f"{indicator} {session['name']}",
                 _truncate(repo_name, 30),
                 _truncate(base_branch, 30),
                 windows,
                 status,
                 key=row_key,
             )
+
+            if expanded and session["managed"] and session["id"] is not None:
+                worktrees = get_worktrees_for_session(self._manager._conn, session["id"])
+                if worktrees:
+                    for wt in worktrees:
+                        table.add_row(
+                            f"  [dim]└[/dim] [dim]{wt.branch}[/dim]",
+                            "",
+                            "",
+                            "",
+                            f"[dim]{_truncate(wt.path, 40)}[/dim]",
+                            key=f"wt:{wt.id}",
+                        )
+                else:
+                    table.add_row(
+                        "  [dim]└ (no worktrees)[/dim]",
+                        "",
+                        "",
+                        "",
+                        "",
+                        key=f"wt-empty:{session['id']}",
+                    )
 
         if self._sessions:
             table.move_cursor(row=0)
@@ -156,12 +183,33 @@ class SessionListScreen(Screen):
     def action_cursor_up(self) -> None:
         self.query_one(DataTable).action_cursor_up()
 
-    def action_select(self) -> None:
+    def _current_row_key(self) -> str | None:
         table = self.query_one(DataTable)
         if table.row_count == 0:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+    def _is_worktree_row(self, row_key: str) -> bool:
+        return row_key.startswith("wt:")
+
+    def action_select(self) -> None:
+        row_key = self._current_row_key()
+        if row_key is None or self._is_worktree_row(row_key):
             return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-        self._switch_to_session(row_key.value)
+        self._switch_to_session(row_key)
+
+    def action_toggle_expand(self) -> None:
+        row_key = self._current_row_key()
+        if row_key is None or self._is_worktree_row(row_key):
+            return
+        session = self._session_for_row_key(row_key)
+        if session is None or not session["managed"]:
+            return
+        if row_key in self._expanded:
+            self._expanded.discard(row_key)
+        else:
+            self._expanded.add(row_key)
+        self._refresh_table()
 
     def _switch_to_session(self, row_key: str | None) -> None:
         if row_key is None:
@@ -188,52 +236,39 @@ class SessionListScreen(Screen):
     def action_new_session(self) -> None:
         self.app.push_screen(NewSessionScreen(self._manager))
 
+    def _current_session(self) -> dict | None:
+        """Get the session for the current row, or None if on a worktree row."""
+        row_key = self._current_row_key()
+        if row_key is None or self._is_worktree_row(row_key):
+            return None
+        return self._session_for_row_key(row_key)
+
     def action_new_tab(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        session = self._session_for_row_key(row_key)
+        session = self._current_session()
         if session is None or not session["managed"]:
             return
         self.app.push_screen(NewTabScreen(self._manager, session["id"], session["name"]))
 
     def action_rename(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        session = self._session_for_row_key(row_key)
+        session = self._current_session()
         if session is None or not session["managed"]:
             return
         self.app.push_screen(RenameSessionScreen(self._manager, session["id"], session["name"]))
 
     def action_edit_branch(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        session = self._session_for_row_key(row_key)
+        session = self._current_session()
         if session is None or not session["managed"]:
             return
         self.app.push_screen(EditBranchScreen(self._manager, session["id"], session["name"]))
 
     def action_adopt(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        session = self._session_for_row_key(row_key)
+        session = self._current_session()
         if session is None or session["managed"]:
             return
         self.app.push_screen(AdoptSessionScreen(self._manager, session["name"]))
 
     def action_delete_session(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count == 0:
-            return
-        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
-        session = self._session_for_row_key(row_key)
+        session = self._current_session()
         if session is None:
             return
 
