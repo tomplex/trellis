@@ -170,7 +170,11 @@ class SessionListScreen(Screen):
                     # Claude shows up as a version number (e.g. 2.1.89)
                     is_claude = bool(cmd and re.match(r"^\d+\.\d+\.\d+", cmd))
                     if is_claude:
-                        cmd_display = "[#E87B35]✦ claude[/#E87B35]"
+                        claude_id = _get_claude_session_id(win.get("pane_pid", ""))
+                        if claude_id:
+                            cmd_display = f"[#E87B35]✦ claude[/#E87B35] [dim]{claude_id[:8]}[/dim]"
+                        else:
+                            cmd_display = "[#E87B35]✦ claude[/#E87B35]"
                     elif cmd and cmd != "zsh":
                         cmd_display = f"[italic]{cmd}[/italic]"
                     else:
@@ -371,6 +375,17 @@ class SessionListScreen(Screen):
 
 
 _SWITCH_FILE = Path(tempfile.gettempdir()) / "torchard-switch.json"
+
+
+def _get_claude_session_id(pane_pid: str) -> str | None:
+    """Look up the Claude session UUID for a given pane PID."""
+    if not pane_pid:
+        return None
+    pid_file = Path("/tmp/claude-sessions") / f"pid-{pane_pid}"
+    try:
+        return pid_file.read_text().strip() if pid_file.exists() else None
+    except OSError:
+        return None
 
 
 def _write_switch(action: dict) -> None:
