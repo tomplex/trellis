@@ -5,23 +5,33 @@ def main() -> None:
     from torchard.core.manager import Manager
     from torchard.tui.app import TorchardApp
 
+    import json
     import subprocess
+    import tempfile
+
+    SWITCH_FILE = Path(tempfile.gettempdir()) / "torchard-switch.json"
+
+    # Clean up any stale switch file
+    SWITCH_FILE.unlink(missing_ok=True)
 
     first_run = not Path(_DEFAULT_DB_PATH).exists()
     conn = init_db()
     manager = Manager(conn)
     if first_run:
         manager.scan_existing()
-    result = TorchardApp(manager).run()
+    TorchardApp(manager).run()
 
     # Handle tmux switching after the TUI is fully closed
-    if isinstance(result, tuple):
-        if result[0] == "session":
-            subprocess.run(["tmux", "switch-client", "-t", result[1]])
-        elif result[0] == "window":
-            session_name, window_index = result[1], result[2]
-            subprocess.run(["tmux", "select-window", "-t", f"{session_name}:{window_index}"])
-            subprocess.run(["tmux", "switch-client", "-t", session_name])
+    if SWITCH_FILE.exists():
+        try:
+            action = json.loads(SWITCH_FILE.read_text())
+            if action["type"] == "session":
+                subprocess.run(["tmux", "switch-client", "-t", action["target"]])
+            elif action["type"] == "window":
+                subprocess.run(["tmux", "select-window", "-t", f"{action['session']}:{action['window']}"])
+                subprocess.run(["tmux", "switch-client", "-t", action["session"]])
+        finally:
+            SWITCH_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

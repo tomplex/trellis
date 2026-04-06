@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
+import tempfile
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -216,7 +219,8 @@ class SessionListScreen(Screen):
             parts = row_key.split(":", 2)
             session_name = parts[1]
             window_index = int(parts[2])
-            self.app.exit(result=("window", session_name, window_index))
+            _write_switch({"type": "window", "session": session_name, "window": window_index})
+            self.app.exit()
             return
         if self._is_child_row(row_key):
             return
@@ -241,7 +245,8 @@ class SessionListScreen(Screen):
         session = self._session_for_row_key(row_key)
         if session is None:
             return
-        self.app.exit(result=("session", session["name"]))
+        _write_switch({"type": "session", "target": session["name"]})
+        self.app.exit()
 
     def _session_for_row_key(self, row_key: str) -> dict | None:
         if row_key.startswith("unmanaged:"):
@@ -348,6 +353,13 @@ class SessionListScreen(Screen):
 
     def action_help(self) -> None:
         self.app.push_screen(HelpScreen())
+
+
+_SWITCH_FILE = Path(tempfile.gettempdir()) / "torchard-switch.json"
+
+
+def _write_switch(action: dict) -> None:
+    _SWITCH_FILE.write_text(json.dumps(action))
 
 
 def _truncate(text: str, max_len: int) -> str:
