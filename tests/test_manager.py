@@ -101,7 +101,14 @@ class TestCreateSession:
         assert len(get_sessions(conn)) == 2
 
     def test_returns_session_object(self, mgr):
-        with _patch_git_detect(), _patch_tmux_new_session(), _patch_git_create_worktree(), _patch_git_fetch_and_pull():
+        with (
+            _patch_git_detect(),
+            _patch_tmux_new_session(),
+            _patch_tmux_new_window(),
+            _patch_git_create_worktree(),
+            _patch_git_fetch_and_pull(),
+            patch("torchard.core.manager.subprocess.run"),
+        ):
             session = mgr.create_session(REPO_PATH, "feature", SESSION_NAME)
         assert isinstance(session, Session)
         assert session.base_branch == "feature"

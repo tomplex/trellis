@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -115,18 +114,20 @@ class Manager:
             ),
         )
 
-        # Use worktree-session for the standard 3-window layout if available,
-        # otherwise fall back to a bare tmux session
-        worktree_session_bin = shutil.which("worktree-session")
-        if worktree_session_bin and start_dir != repo_path:
-            cmd = [worktree_session_bin, session_name, start_dir]
-            if subdirectory:
-                cmd.append(subdirectory)
-            subprocess.run(cmd, capture_output=True)
+        effective_dir = start_dir
+        if subdirectory:
+            effective_dir = str(Path(start_dir) / subdirectory)
+
+        if start_dir != repo_path:
+            # Feature branch: 3-window layout (claude, diff, shell)
+            tmux.new_session(session_name, effective_dir)
+            subprocess.run(["tmux", "rename-window", "-t", f"{session_name}:1", "claude"], capture_output=True)
+            subprocess.run(["tmux", "send-keys", "-t", f"{session_name}:1", "claude", "Enter"], capture_output=True)
+            tmux.new_window(session_name, "diff", start_dir)
+            subprocess.run(["tmux", "send-keys", "-t", f"{session_name}:diff", "branch-diff", "Enter"], capture_output=True)
+            tmux.new_window(session_name, "shell", effective_dir)
+            subprocess.run(["tmux", "select-window", "-t", f"{session_name}:1"], capture_output=True)
         else:
-            effective_dir = start_dir
-            if subdirectory:
-                effective_dir = str(Path(start_dir) / subdirectory)
             tmux.new_session(session_name, effective_dir)
 
         # Record worktree if we created one
