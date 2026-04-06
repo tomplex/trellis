@@ -17,7 +17,7 @@ from torchard.tui.views.confirm import ConfirmModal
 from torchard.tui.views.edit_branch import EditBranchScreen
 from torchard.tui.views.new_session import NewSessionScreen
 from torchard.tui.views.new_tab import NewTabScreen
-from torchard.tui.views.rename_session import RenameSessionScreen
+from torchard.tui.views.rename_session import RenameSessionScreen, RenameWindowScreen
 
 
 _HELP_TEXT = """\
@@ -252,6 +252,23 @@ class SessionListScreen(Screen):
         self.app.push_screen(NewTabScreen(self._manager, session["id"], session["name"]))
 
     def action_rename(self) -> None:
+        row_key = self._current_row_key()
+        if row_key is None:
+            return
+        # Rename a tmux window (tab)
+        if row_key.startswith("win:"):
+            # key format: win:<session_name>:<index>
+            parts = row_key.split(":", 2)
+            session_name = parts[1]
+            window_index = int(parts[2])
+            # Get current window name from tmux
+            windows = tmux.list_windows(session_name)
+            win = next((w for w in windows if w["index"] == window_index), None)
+            if win is None:
+                return
+            self.app.push_screen(RenameWindowScreen(session_name, window_index, win["name"]))
+            return
+        # Rename a session
         session = self._current_session()
         if session is None or not session["managed"]:
             return
