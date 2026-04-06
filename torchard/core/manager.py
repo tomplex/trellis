@@ -123,6 +123,19 @@ class Manager:
         session.name = new_name
         return session
 
+    def set_base_branch(self, session_id: int, base_branch: str) -> Session:
+        """Update a session's base branch."""
+        session = self._get_session_by_id(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        self._conn.execute(
+            "UPDATE sessions SET base_branch = ? WHERE id = ?",
+            (base_branch, session_id),
+        )
+        self._conn.commit()
+        session.base_branch = base_branch
+        return session
+
     def add_tab(self, session_id: int, branch_name: str) -> Worktree:
         """Create a worktree + tmux window for the given session."""
         session = self._get_session_by_id(session_id)

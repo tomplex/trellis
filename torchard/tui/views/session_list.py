@@ -13,6 +13,7 @@ from torchard.core.db import get_repos
 from torchard.core.manager import Manager
 from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
+from torchard.tui.views.edit_branch import EditBranchScreen
 from torchard.tui.views.new_session import NewSessionScreen
 from torchard.tui.views.new_tab import NewTabScreen
 from torchard.tui.views.rename_session import RenameSessionScreen
@@ -77,6 +78,7 @@ class SessionListScreen(Screen):
         Binding("w", "new_tab", "Tab"),
         Binding("d", "delete_session", "Delete"),
         Binding("r", "rename", "Rename"),
+        Binding("b", "edit_branch", "Branch"),
         Binding("a", "adopt", "Adopt"),
         Binding("c", "cleanup", "Cleanup"),
         Binding("question_mark", "help", "Help"),
@@ -93,11 +95,19 @@ class SessionListScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("Session", "Repo", "Base Branch", "Windows", "")
+        self._refresh_table()
+
+    def on_screen_resume(self) -> None:
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
         self._repos = {r.id: r for r in get_repos(self._manager._conn)}
         self._sessions = self._manager.list_sessions()
 
         table = self.query_one(DataTable)
-        table.add_columns("Session", "Repo", "Base Branch", "Windows", "")
+        table.clear()
 
         for session in self._sessions:
             repo = self._repos.get(session["repo_id"]) if session["repo_id"] else None
@@ -111,7 +121,6 @@ class SessionListScreen(Screen):
                 status = "[blue]○[/blue]"
             if not session["managed"]:
                 status += " [dim]unmanaged[/dim]"
-            # Use session name as key for unmanaged sessions (id is None)
             row_key = str(session["id"]) if session["id"] is not None else f"unmanaged:{session['name']}"
             table.add_row(
                 session["name"],
@@ -185,6 +194,16 @@ class SessionListScreen(Screen):
         if session is None or not session["managed"]:
             return
         self.app.push_screen(RenameSessionScreen(self._manager, session["id"], session["name"]))
+
+    def action_edit_branch(self) -> None:
+        table = self.query_one(DataTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        session = self._session_for_row_key(row_key)
+        if session is None or not session["managed"]:
+            return
+        self.app.push_screen(EditBranchScreen(self._manager, session["id"], session["name"]))
 
     def action_adopt(self) -> None:
         table = self.query_one(DataTable)
