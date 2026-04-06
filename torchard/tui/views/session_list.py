@@ -130,7 +130,7 @@ class SessionListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Session", "Repo", "Branch", "Windows", "")
+        table.add_columns("Session", "Repo", "Branch", "Base", "Win")
         self._refresh_table()
         table.focus()
 
@@ -197,25 +197,35 @@ class SessionListScreen(Screen):
                     continue
             repo = self._repos.get(session["repo_id"]) if session["repo_id"] else None
             repo_name = repo.name if repo else "-"
-            base_branch = session["base_branch"] or "-"
+            branch = session["base_branch"] or "-"
+            base = repo.default_branch if repo else "-"
             windows = str(session["windows"]) if session["windows"] is not None else "-"
-            status = ""
+
+            # Status indicator
             if session["attached"]:
-                status = "[green]●[/green]"
+                dot = "[green]●[/green]"
+            elif not session["managed"]:
+                dot = "[dim]◇[/dim]"
             elif session["live"]:
-                status = "[blue]○[/blue]"
-            if not session["managed"]:
-                status += " [dim]unmanaged[/dim]"
+                dot = "[blue]○[/blue]"
+            else:
+                dot = " "
+
             row_key = str(session["id"]) if session["id"] is not None else f"unmanaged:{session['name']}"
             expanded = row_key in self._expanded
             can_expand = session["live"]
-            indicator = "▾" if expanded else "▸" if can_expand else " "
+            expand = "▾" if expanded else "▸" if can_expand else " "
+
+            name_display = session["name"]
+            if session["attached"]:
+                name_display = f"[green]{name_display}[/green]"
+
             table.add_row(
-                f"{indicator} {session['name']}",
-                _truncate(repo_name, 30),
-                _truncate(base_branch, 30),
+                f"{dot} {expand} {name_display}",
+                _truncate(repo_name, 20),
+                _truncate(branch, 25),
+                base,
                 windows,
-                status,
                 key=row_key,
             )
 
@@ -246,7 +256,7 @@ class SessionListScreen(Screen):
                     else:
                         col_detail = f"[dim]{_truncate(win['path'], 30)}[/dim]"
                     table.add_row(
-                        f"  [dim]{prefix}[/dim] [dim]{win['name']}[/dim]",
+                        f"      [dim]{prefix}[/dim] [dim]{win['name']}[/dim]",
                         col_cmd,
                         col_detail,
                         "",
