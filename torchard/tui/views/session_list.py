@@ -216,11 +216,7 @@ class SessionListScreen(Screen):
             parts = row_key.split(":", 2)
             session_name = parts[1]
             window_index = int(parts[2])
-            try:
-                tmux.switch_client(f"{session_name}:{window_index}")
-            except tmux.TmuxError:
-                pass
-            self.app.exit()
+            self.app.exit(result=("window", session_name, window_index))
             return
         if self._is_child_row(row_key):
             return
@@ -245,11 +241,7 @@ class SessionListScreen(Screen):
         session = self._session_for_row_key(row_key)
         if session is None:
             return
-        try:
-            tmux.switch_client(session["name"])
-        except tmux.TmuxError:
-            pass
-        self.app.exit()
+        self.app.exit(result=("session", session["name"]))
 
     def _session_for_row_key(self, row_key: str) -> dict | None:
         if row_key.startswith("unmanaged:"):
