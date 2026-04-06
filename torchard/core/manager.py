@@ -102,15 +102,6 @@ class Manager:
                     else:
                         shutil.copy2(str(src), str(dst))
 
-            # Register with wt-registry if available
-            branch_slug = base_branch.replace("/", "-")
-            wt_registry = shutil.which("wt-registry")
-            if wt_registry:
-                subprocess.run(
-                    [wt_registry, "add", "-b", base_branch, "-p", worktree_path, "--project", repo.name],
-                    capture_output=True,
-                )
-
         session = add_session(
             self._conn,
             Session(
