@@ -28,6 +28,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def detect_subsystems(repo_path: str) -> list[str]:
+    """Detect subsystem directories in a monorepo (e.g. workers/model_train, src/sojourner)."""
+    root = Path(repo_path)
+    subsystems = []
+    for parent_name in ("workers", "src", "libs", "pods"):
+        parent = root / parent_name
+        if parent.is_dir():
+            for child in sorted(parent.iterdir()):
+                if child.is_dir() and not child.name.startswith("."):
+                    subsystems.append(f"{parent_name}/{child.name}")
+    return subsystems
+
+
 class Manager:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
@@ -64,7 +77,7 @@ class Manager:
     # Public API
     # ------------------------------------------------------------------
 
-    def create_session(self, repo_path: str, base_branch: str, session_name: str) -> Session:
+    def create_session(self, repo_path: str, base_branch: str, session_name: str, subdirectory: str | None = None) -> Session:
         """Register repo if needed, create worktree, create DB session, create tmux session."""
         repo = self._get_repo_by_path(repo_path)
         if repo is None:
@@ -92,16 +105,6 @@ class Manager:
                     raise
             start_dir = worktree_path
 
-            # Copy env files into worktree if they exist in the repo root
-            for name in (".env", ".agents"):
-                src = Path(repo_path) / name
-                dst = Path(worktree_path) / name
-                if src.exists() and not dst.exists():
-                    if src.is_dir():
-                        shutil.copytree(str(src), str(dst))
-                    else:
-                        shutil.copy2(str(src), str(dst))
-
         session = add_session(
             self._conn,
             Session(
@@ -114,11 +117,17 @@ class Manager:
 
         # Use worktree-session for the standard 3-window layout if available,
         # otherwise fall back to a bare tmux session
-        worktree_session = shutil.which("worktree-session")
-        if worktree_session and start_dir != repo_path:
-            subprocess.run([worktree_session, session_name, start_dir], capture_output=True)
+        worktree_session_bin = shutil.which("worktree-session")
+        if worktree_session_bin and start_dir != repo_path:
+            cmd = [worktree_session_bin, session_name, start_dir]
+            if subdirectory:
+                cmd.append(subdirectory)
+            subprocess.run(cmd, capture_output=True)
         else:
-            tmux.new_session(session_name, start_dir)
+            effective_dir = start_dir
+            if subdirectory:
+                effective_dir = str(Path(start_dir) / subdirectory)
+            tmux.new_session(session_name, effective_dir)
 
         # Record worktree if we created one
         if start_dir != repo_path:

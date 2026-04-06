@@ -14,7 +14,7 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, Static
 from torchard.core import tmux
 from torchard.core.db import get_session_by_name
 from torchard.core.git import GitError, list_branches
-from torchard.core.manager import Manager
+from torchard.core.manager import Manager, detect_subsystems
 from torchard.core.models import Repo
 
 
@@ -100,14 +100,17 @@ class NewSessionScreen(Screen):
 
         self._selected_repo: Repo | None = None
         self._selected_branch: str | None = None
+        self._selected_subdirectory: str | None = None
 
         self._repos: list[Repo] = []
         self._branches: list[str] = []
+        self._subsystems: list[str] = []
 
         # When True the filter input is being used to collect a raw filesystem path
         self._awaiting_repo_path = False
         self._render_seq = 0  # uniquify widget IDs across re-renders
         self._id_to_branch: dict[str, str] = {}  # widget id -> actual branch name
+        self._id_to_subsystem: dict[str, str] = {}  # widget id -> subsystem path
 
     # ------------------------------------------------------------------
     # Compose
@@ -153,6 +156,10 @@ class NewSessionScreen(Screen):
     # Step rendering
     # ------------------------------------------------------------------
 
+    @property
+    def _total_steps(self) -> int:
+        return 4 if self._subsystems else 3
+
     def _render_step(self) -> None:
         self._awaiting_repo_path = False
         self._set_error("")
@@ -162,9 +169,11 @@ class NewSessionScreen(Screen):
             self._render_branch_step()
         elif self._step == 3:
             self._render_name_step()
+        elif self._step == 4:
+            self._render_subsystem_step()
 
     def _render_repo_step(self) -> None:
-        self._set_title("Step 1 / 3 — Select Repository")
+        self._set_title("Step 1 — Select Repository")
         self._set_hint("Type to filter. Enter to select. Escape to cancel.")
         self._show_list_widgets()
 
@@ -185,7 +194,7 @@ class NewSessionScreen(Screen):
 
     def _render_branch_step(self) -> None:
         assert self._selected_repo is not None
-        self._set_title(f"Step 2 / 3 — Select Branch  [dim]({self._selected_repo.name})[/dim]")
+        self._set_title(f"Step 2 — Select Branch  [dim]({self._selected_repo.name})[/dim]")
         self._set_hint("Type to filter or enter a new branch name. Enter to confirm.")
         self._show_list_widgets()
 
@@ -204,7 +213,7 @@ class NewSessionScreen(Screen):
 
     def _render_name_step(self) -> None:
         assert self._selected_branch is not None
-        self._set_title("Step 3 / 3 — Session Name")
+        self._set_title("Step 3 — Session Name")
         self._set_hint("Edit the name then press Enter to create. Escape to go back.")
         self._show_name_widgets()
 
@@ -258,6 +267,9 @@ class NewSessionScreen(Screen):
         elif self._step == 2:
             filtered = [b for b in self._branches if query in b.lower()]
             self._populate_branch_list(filtered, event.value)
+        elif self._step == 4:
+            filtered = [s for s in self._subsystems if query in s.lower()]
+            self._populate_subsystem_list(filtered)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "filter-input":
@@ -272,6 +284,8 @@ class NewSessionScreen(Screen):
         item_id = event.item.id
         if self._step == 1:
             self._select_repo_item(item_id)
+        elif self._step == 4:
+            self._select_subsystem_item(item_id)
         elif self._step == 2:
             self._select_branch_item(item_id)
 
@@ -292,6 +306,8 @@ class NewSessionScreen(Screen):
                 self._select_repo_item(item_id)
             elif self._step == 2:
                 self._select_branch_item(item_id)
+            elif self._step == 4:
+                self._select_subsystem_item(item_id)
         elif self._step == 2 and typed_value:
             # Treat typed text as a new branch name (no list match needed)
             self._selected_branch = typed_value
@@ -337,7 +353,50 @@ class NewSessionScreen(Screen):
         if existing is not None:
             self._set_error(f"Session '{name}' already exists. Choose a different name.")
             return
-        self._create_session(name)
+        self._session_name = name
+
+        # Check for subsystems
+        assert self._selected_repo is not None
+        self._subsystems = detect_subsystems(self._selected_repo.path)
+        if self._subsystems:
+            self._step = 4
+            self._render_step()
+        else:
+            self._create_session(name)
+
+    def _render_subsystem_step(self) -> None:
+        assert self._selected_repo is not None
+        self._set_title(f"Step 4 — Working Directory  [dim]({self._selected_repo.name})[/dim]")
+        self._set_hint("Pick a subsystem to start in, or select root. Enter to confirm.")
+        self._show_list_widgets()
+
+        fi = self.query_one("#filter-input", Input)
+        fi.placeholder = "Filter…"
+        fi.value = ""
+
+        self._populate_subsystem_list(self._subsystems)
+        fi.focus()
+
+    def _populate_subsystem_list(self, subsystems: list[str]) -> None:
+        self._render_seq += 1
+        seq = self._render_seq
+        self._id_to_subsystem.clear()
+        lv = self.query_one("#item-list", ListView)
+        lv.clear()
+        # Root option first
+        root_id = f"subsys-root-{seq}"
+        self._id_to_subsystem[root_id] = ""
+        lv.append(ListItem(Label("[bold]/ (root)[/bold]"), id=root_id))
+        for sub in subsystems:
+            widget_id = f"subsys-{_safe_id(sub)}-{seq}"
+            self._id_to_subsystem[widget_id] = sub
+            lv.append(ListItem(Label(sub), id=widget_id))
+
+    def _select_subsystem_item(self, item_id: str | None) -> None:
+        if item_id and item_id in self._id_to_subsystem:
+            subdir = self._id_to_subsystem[item_id]
+            self._selected_subdirectory = subdir or None
+            self._create_session(self._session_name)
 
     def _create_session(self, session_name: str) -> None:
         assert self._selected_repo is not None
@@ -347,6 +406,7 @@ class NewSessionScreen(Screen):
                 repo_path=self._selected_repo.path,
                 base_branch=self._selected_branch,
                 session_name=session_name,
+                subdirectory=self._selected_subdirectory,
             )
         except Exception as exc:
             self._set_error(f"Error: {exc}")
@@ -403,7 +463,7 @@ class NewSessionScreen(Screen):
             fi = self.query_one("#filter-input", Input)
             fi.placeholder = "Filter repos…"
             fi.value = ""
-            self._populate_repo_list(self._repos)
+            self._populate_repo_list_from_dirs(self._dev_dirs)
             self._set_hint("Type to filter. Enter to select. Escape to cancel.")
             self._set_error("")
             return
@@ -415,4 +475,6 @@ class NewSessionScreen(Screen):
                 self._selected_repo = None
             elif self._step == 2:
                 self._selected_branch = None
+            elif self._step == 3:
+                self._selected_subdirectory = None
             self._render_step()
