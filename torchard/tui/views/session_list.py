@@ -176,8 +176,9 @@ class SessionListScreen(Screen):
         self._repos = {r.id: r for r in get_repos(self._manager._conn)}
         self._sessions = self._manager.list_sessions()
 
-        # Sort: attached first, then live, then dead
+        # Sort: "main" always first, then attached, then live, then dead
         self._sessions.sort(key=lambda s: (
+            0 if s["name"] == "main" else 1,
             0 if s["attached"] else 1 if s["live"] else 2,
             s["name"].lower(),
         ))
