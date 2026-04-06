@@ -35,7 +35,18 @@ class HistoryScreen(Screen):
         Binding("j,down", "cursor_down", "Down", show=False),
         Binding("k,up", "cursor_up", "Up", show=False),
         Binding("t", "toggle_scope", "Toggle scope"),
+        Binding("d", "sort_date", "Sort date"),
+        Binding("p", "sort_project", "Sort project"),
+        Binding("b", "sort_branch", "Sort branch"),
+        Binding("s", "sort_summary", "Sort summary"),
     ]
+
+    SORT_KEYS = {
+        "date": lambda e: e.date,
+        "project": lambda e: e.project.lower(),
+        "branch": lambda e: e.branch.lower(),
+        "summary": lambda e: e.summary.lower(),
+    }
 
     def __init__(
         self,
@@ -52,6 +63,8 @@ class HistoryScreen(Screen):
         self._scoped_entries: list[Conversation] = []
         self._displayed: list[Conversation] = []
         self._filter = ""
+        self._sort_by = "date"
+        self._sort_reverse = True  # newest first by default
 
     def compose(self) -> ComposeResult:
         yield Static("", id="history-title")
@@ -84,6 +97,8 @@ class HistoryScreen(Screen):
                 or q in e.summary.lower()
             ]
 
+        sort_fn = self.SORT_KEYS[self._sort_by]
+        entries = sorted(entries, key=sort_fn, reverse=self._sort_reverse)
         self._displayed = entries
         self._update_title()
 
@@ -110,7 +125,8 @@ class HistoryScreen(Screen):
             scope_text = f"[dim]scoped to[/dim] {self._scope_label}"
         else:
             scope_text = "[dim]all conversations[/dim]"
-        title = f"[bold]History[/bold]  {scope_text}  [dim]({count})[/dim]  [dim]\\[t] toggle scope[/dim]"
+        arrow = "↓" if self._sort_reverse else "↑"
+        title = f"[bold]History[/bold]  {scope_text}  [dim]({count})[/dim]  [dim]sort: {self._sort_by} {arrow}[/dim]"
         self.query_one("#history-title", Static).update(title)
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -123,6 +139,26 @@ class HistoryScreen(Screen):
 
     def action_cursor_up(self) -> None:
         self.query_one(DataTable).action_cursor_up()
+
+    def _sort(self, key: str) -> None:
+        if self._sort_by == key:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_by = key
+            self._sort_reverse = key == "date"  # date defaults descending, others ascending
+        self._rebuild()
+
+    def action_sort_date(self) -> None:
+        self._sort("date")
+
+    def action_sort_project(self) -> None:
+        self._sort("project")
+
+    def action_sort_branch(self) -> None:
+        self._sort("branch")
+
+    def action_sort_summary(self) -> None:
+        self._sort("summary")
 
     def action_toggle_scope(self) -> None:
         if not self._scope_paths:
