@@ -123,7 +123,7 @@ class SessionListScreen(Screen):
     def on_screen_resume(self) -> None:
         self._refresh_table()
 
-    def _refresh_table(self) -> None:
+    def _refresh_table(self, restore_key: str | None = None) -> None:
         self._repos = {r.id: r for r in get_repos(self._manager._conn)}
         self._sessions = self._manager.list_sessions()
 
@@ -191,7 +191,14 @@ class SessionListScreen(Screen):
                     )
 
         if self._sessions:
-            table.move_cursor(row=0)
+            # Restore cursor to the row with the given key, or row 0
+            target_row = 0
+            if restore_key is not None:
+                for i, rk in enumerate(table.rows):
+                    if rk.value == restore_key:
+                        target_row = i
+                        break
+            table.move_cursor(row=target_row)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         row_key = event.row_key.value
@@ -245,7 +252,7 @@ class SessionListScreen(Screen):
             self._expanded.discard(row_key)
         else:
             self._expanded.add(row_key)
-        self._refresh_table()
+        self._refresh_table(restore_key=row_key)
 
     def _switch_to_session(self, row_key: str | None) -> None:
         if row_key is None:
