@@ -19,6 +19,7 @@ from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
 from torchard.tui.views.confirm import ConfirmModal
 from torchard.tui.views.edit_branch import EditBranchScreen
+from torchard.tui.views.history import HistoryScreen
 from torchard.tui.views.new_session import NewSessionScreen
 from torchard.tui.views.new_tab import NewTabScreen
 from torchard.tui.views.rename_session import RenameSessionScreen, RenameWindowScreen
@@ -38,6 +39,7 @@ _HELP_TEXT = """\
   [#00aaff]b[/#00aaff]         Change base branch
   [#00aaff]g[/#00aaff]         Launch claude in session
   [#00aaff]p[/#00aaff]         Checkout PR/branch + claude
+  [#00aaff]h[/#00aaff]         Conversation history
   [#00aaff]a[/#00aaff]         Adopt unmanaged session
   [#00aaff]c[/#00aaff]         Cleanup stale worktrees
   [#00aaff]j/k[/#00aaff]       Navigate up/down
@@ -108,6 +110,7 @@ class SessionListScreen(Screen):
         Binding("g", "launch_claude", "Claude"),
         Binding("p", "review", "PR/Branch"),
         Binding("a", "adopt", "Adopt"),
+        Binding("h", "history", "History"),
         Binding("c", "cleanup", "Cleanup"),
         Binding("question_mark", "help", "Help"),
     ]
@@ -464,6 +467,27 @@ class SessionListScreen(Screen):
                 ConfirmModal(f"Kill tmux session '{name}'?", "This will close all windows in the session."),
                 on_confirm_kill,
             )
+
+    def action_history(self) -> None:
+        session = self._current_session()
+        scope_paths = None
+        scope_label = None
+        if session and session["managed"]:
+            repo = self._repos.get(session["repo_id"])
+            if repo:
+                # Scope to repo path + all its worktree paths
+                from torchard.core.db import get_worktrees_for_session
+                paths = [repo.path]
+                if session["id"] is not None:
+                    for wt in get_worktrees_for_session(self._manager._conn, session["id"]):
+                        paths.append(wt.path)
+                # Also include worktrees root for this repo
+                from pathlib import Path
+                wt_root = str(Path.home() / "dev" / "worktrees" / repo.name)
+                paths.append(wt_root)
+                scope_paths = paths
+                scope_label = session["name"]
+        self.app.push_screen(HistoryScreen(self._manager, scope_paths, scope_label))
 
     def action_cleanup(self) -> None:
         self.app.push_screen(CleanupScreen(self._manager))
