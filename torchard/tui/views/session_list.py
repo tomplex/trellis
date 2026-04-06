@@ -210,7 +210,20 @@ class SessionListScreen(Screen):
 
     def action_select(self) -> None:
         row_key = self._current_row_key()
-        if row_key is None or self._is_child_row(row_key):
+        if row_key is None:
+            return
+        if row_key.startswith("win:"):
+            parts = row_key.split(":", 2)
+            session_name = parts[1]
+            window_index = int(parts[2])
+            try:
+                tmux.select_window(session_name, window_index)
+                tmux.switch_client(session_name)
+            except tmux.TmuxError:
+                pass
+            self.app.exit()
+            return
+        if self._is_child_row(row_key):
             return
         self._switch_to_session(row_key)
 

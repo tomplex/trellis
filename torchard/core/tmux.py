@@ -86,6 +86,15 @@ def new_window(session_name: str, window_name: str, start_dir: str) -> None:
         )
 
 
+def select_window(session_name: str, window_index: int) -> None:
+    """Select a specific window in a session."""
+    result = _run(["tmux", "select-window", "-t", f"{session_name}:{window_index}"])
+    if result.returncode != 0:
+        raise TmuxError(
+            f"Failed to select window {window_index} in '{session_name}': {result.stderr.strip()}"
+        )
+
+
 def rename_window(session_name: str, window_index: int, new_name: str) -> None:
     """Rename a tmux window."""
     result = _run(["tmux", "rename-window", "-t", f"{session_name}:{window_index}", new_name])
