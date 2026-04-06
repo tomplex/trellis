@@ -4,81 +4,13 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen, Screen
+from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
-from textual.containers import Horizontal, Vertical
 
 from torchard.core.db import get_sessions, get_worktrees
 from torchard.core.manager import Manager
 from torchard.core.models import Session, Worktree
-
-
-class ConfirmDeleteModal(ModalScreen[bool]):
-    """Simple yes/no confirmation modal."""
-
-    BINDINGS = [
-        Binding("y", "confirm", "Yes"),
-        Binding("n", "cancel", "No"),
-        Binding("escape", "cancel", "No"),
-    ]
-
-    def __init__(self, count: int) -> None:
-        super().__init__()
-        self._count = count
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(
-                f"[bold]Delete {self._count} worktree{'s' if self._count != 1 else ''}?[/bold]",
-                id="confirm-title",
-            ),
-            Static("This will remove the git worktree(s) and DB records.", id="confirm-body"),
-            Horizontal(
-                Static("[bold green]\\[y][/bold green] Yes", id="confirm-yes"),
-                Static("[bold red]\\[n][/bold red] No", id="confirm-no"),
-                id="confirm-buttons",
-            ),
-            id="confirm-container",
-        )
-
-    def action_confirm(self) -> None:
-        self.dismiss(True)
-
-    def action_cancel(self) -> None:
-        self.dismiss(False)
-
-    DEFAULT_CSS = """
-    ConfirmDeleteModal {
-        align: center middle;
-    }
-    #confirm-container {
-        background: #16213e;
-        border: solid #00aaff;
-        padding: 2 4;
-        width: 60;
-        height: auto;
-    }
-    #confirm-title {
-        text-align: center;
-        color: #ff6b6b;
-        margin-bottom: 1;
-    }
-    #confirm-body {
-        text-align: center;
-        color: #e0e0e0;
-        margin-bottom: 2;
-    }
-    #confirm-buttons {
-        align: center middle;
-        height: auto;
-    }
-    #confirm-yes {
-        margin-right: 4;
-    }
-    #confirm-no {
-        margin-left: 4;
-    }
-    """
+from torchard.tui.views.confirm import ConfirmModal
 
 
 class CleanupScreen(Screen):
@@ -251,7 +183,14 @@ class CleanupScreen(Screen):
             if errors:
                 self.notify("\n".join(errors), severity="error", title="Errors during cleanup")
 
-        self.app.push_screen(ConfirmDeleteModal(len(self._selected)), on_confirm)
+        count = len(self._selected)
+        self.app.push_screen(
+            ConfirmModal(
+                f"Delete {count} worktree{'s' if count != 1 else ''}?",
+                "This will remove the git worktree(s) and DB records.",
+            ),
+            on_confirm,
+        )
 
     def action_dismiss(self) -> None:
         self.app.pop_screen()

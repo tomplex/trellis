@@ -13,6 +13,7 @@ from torchard.core.db import get_repos
 from torchard.core.manager import Manager
 from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
+from torchard.tui.views.confirm import ConfirmModal
 from torchard.tui.views.edit_branch import EditBranchScreen
 from torchard.tui.views.new_session import NewSessionScreen
 from torchard.tui.views.new_tab import NewTabScreen
@@ -216,7 +217,47 @@ class SessionListScreen(Screen):
         self.app.push_screen(AdoptSessionScreen(self._manager, session["name"]))
 
     def action_delete_session(self) -> None:
-        self.app.push_screen(PlaceholderScreen("Delete Session"))
+        table = self.query_one(DataTable)
+        if table.row_count == 0:
+            return
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        session = self._session_for_row_key(row_key)
+        if session is None:
+            return
+
+        if session["managed"]:
+            name = session["name"]
+            msg = "Remove from torchard."
+            if session["live"]:
+                msg += " The tmux session will also be killed."
+
+            def on_confirm(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                self._manager.delete_session(session["id"], cleanup_worktrees=False)
+                self._refresh_table()
+
+            self.app.push_screen(
+                ConfirmModal(f"Delete session '{name}'?", msg),
+                on_confirm,
+            )
+        else:
+            # Unmanaged - just offer to kill the tmux session
+            name = session["name"]
+
+            def on_confirm_kill(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                try:
+                    tmux.kill_session(name)
+                except tmux.TmuxError:
+                    pass
+                self._refresh_table()
+
+            self.app.push_screen(
+                ConfirmModal(f"Kill tmux session '{name}'?", "This will close all windows in the session."),
+                on_confirm_kill,
+            )
 
     def action_cleanup(self) -> None:
         self.app.push_screen(CleanupScreen(self._manager))
