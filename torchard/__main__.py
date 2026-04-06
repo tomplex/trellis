@@ -26,16 +26,9 @@ def main() -> None:
         try:
             action = json.loads(SWITCH_FILE.read_text())
             if action["type"] == "session":
-                r = subprocess.run(["tmux", "switch-client", "-t", action["target"]], capture_output=True, text=True)
-                if r.returncode != 0:
-                    print(f"switch-client failed: {r.stderr.strip()}")
+                subprocess.run(["tmux", "switch-client", "-t", action["target"]])
             elif action["type"] == "window":
-                target = f"{action['session']}:{action['window']}"
-                r = subprocess.run(["tmux", "switch-client", "-t", target], capture_output=True, text=True)
-                if r.returncode != 0:
-                    print(f"switch-client -t {target} failed: {r.stderr.strip()}")
-                else:
-                    print(f"switch-client -t {target} succeeded")
+                subprocess.run(["tmux", "switch-client", "-t", f"{action['session']}:{action['window']}"])
         finally:
             SWITCH_FILE.unlink(missing_ok=True)
 
