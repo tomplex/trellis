@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import re
-import tempfile
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -16,6 +14,7 @@ from textual.containers import Vertical
 from torchard.core import tmux
 from torchard.core.db import get_repos, get_worktrees_for_session
 from torchard.core.manager import Manager
+from torchard.tui.switch import write_switch
 from torchard.tui.views.adopt_session import AdoptSessionScreen
 from torchard.tui.views.cleanup import CleanupScreen
 from torchard.tui.views.confirm import ConfirmModal
@@ -265,7 +264,7 @@ class SessionListScreen(Screen):
         row_key = event.row_key.value
         if row_key and row_key.startswith("win:"):
             parts = row_key.split(":", 2)
-            _write_switch({"type": "window", "session": parts[1], "window": int(parts[2])})
+            write_switch({"type": "window", "session": parts[1], "window": int(parts[2])})
             self.app.exit()
             return
         if row_key and self._is_child_row(row_key):
@@ -295,7 +294,7 @@ class SessionListScreen(Screen):
             parts = row_key.split(":", 2)
             session_name = parts[1]
             window_index = int(parts[2])
-            _write_switch({"type": "window", "session": session_name, "window": window_index})
+            write_switch({"type": "window", "session": session_name, "window": window_index})
             self.app.exit()
             return
         if self._is_child_row(row_key):
@@ -321,7 +320,7 @@ class SessionListScreen(Screen):
         session = self._session_for_row_key(row_key)
         if session is None:
             return
-        _write_switch({"type": "session", "target": session["name"]})
+        write_switch({"type": "session", "target": session["name"]})
         self.app.exit()
 
     def _session_for_row_key(self, row_key: str) -> dict | None:
@@ -387,7 +386,7 @@ class SessionListScreen(Screen):
         import subprocess
         subprocess.run(["tmux", "new-window", "-t", session["name"], "-n", "claude"])
         subprocess.run(["tmux", "send-keys", "-t", f"{session['name']}:claude", "claude", "Enter"])
-        _write_switch({"type": "session", "target": session["name"]})
+        write_switch({"type": "session", "target": session["name"]})
         self.app.exit()
 
     def action_review(self) -> None:
@@ -473,9 +472,6 @@ class SessionListScreen(Screen):
         self.app.push_screen(HelpScreen())
 
 
-_SWITCH_FILE = Path(tempfile.gettempdir()) / "torchard-switch.json"
-
-
 def _get_claude_session_id(pane_pid: str) -> str | None:
     """Look up the Claude session UUID for a given pane PID."""
     if not pane_pid:
@@ -487,8 +483,6 @@ def _get_claude_session_id(pane_pid: str) -> str | None:
         return None
 
 
-def _write_switch(action: dict) -> None:
-    _SWITCH_FILE.write_text(json.dumps(action))
 
 
 def _truncate(text: str, max_len: int) -> str:

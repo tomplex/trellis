@@ -76,8 +76,8 @@ class ReviewScreen(Screen):
         ])
 
         # Write switch file and exit
-        from torchard.tui.views.session_list import _write_switch
-        _write_switch({"type": "session", "target": session.name})
+        from torchard.tui.switch import write_switch
+        write_switch({"type": "session", "target": session.name})
         self.call_from_thread(self.app.exit)
 
     def action_cancel(self) -> None:

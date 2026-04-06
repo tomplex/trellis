@@ -7,9 +7,8 @@ def main() -> None:
 
     import json
     import subprocess
-    import tempfile
 
-    SWITCH_FILE = Path(tempfile.gettempdir()) / "torchard-switch.json"
+    from torchard.tui.switch import SWITCH_FILE
 
     # Clean up any stale switch file
     SWITCH_FILE.unlink(missing_ok=True)

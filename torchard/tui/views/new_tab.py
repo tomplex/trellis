@@ -11,7 +11,7 @@ from textual.containers import Vertical
 import subprocess
 
 from torchard.core.manager import Manager
-from torchard.tui.views.session_list import _write_switch
+from torchard.tui.switch import write_switch
 
 
 class NewTabScreen(Screen):
@@ -65,7 +65,7 @@ class NewTabScreen(Screen):
 
         # Launch claude in the new window
         subprocess.run(["tmux", "send-keys", "-t", f"{self._session_name}:{branch_name}", "claude", "Enter"])
-        _write_switch({"type": "session", "target": self._session_name})
+        write_switch({"type": "session", "target": self._session_name})
         self.app.exit()
 
     def action_cancel(self) -> None:
