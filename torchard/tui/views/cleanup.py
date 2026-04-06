@@ -86,7 +86,7 @@ class CleanupScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "dismiss", "Back"),
-        Binding("space", "toggle_selected", "Toggle"),
+        Binding("space,enter", "toggle_selected", "Toggle"),
         Binding("a", "select_all", "Select all"),
         Binding("A", "deselect_all", "Deselect all", show=False),
         Binding("d", "delete_selected", "Delete selected"),
@@ -157,7 +157,7 @@ class CleanupScreen(Screen):
             status = _make_status(wt, is_stale)
             branch_display = f"[yellow]{wt.branch}[/yellow]" if is_stale else wt.branch
             table.add_row(
-                "[ ]",
+                "\\[ ]",
                 branch_display,
                 session_label,
                 _truncate(wt.path, 50),
@@ -185,7 +185,7 @@ class CleanupScreen(Screen):
     def _update_row_checkbox(self, row_key: str) -> None:
         table = self.query_one(DataTable)
         checked = row_key in self._selected
-        marker = "[bold #00aaff][x][/bold #00aaff]" if checked else "[ ]"
+        marker = "[bold #00aaff]\\[x][/bold #00aaff]" if checked else "\\[ ]"
         first_col_key = table.ordered_columns[0].key
         table.update_cell(row_key, first_col_key, marker)
 
