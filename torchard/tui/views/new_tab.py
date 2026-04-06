@@ -8,7 +8,10 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, Label, Static
 from textual.containers import Vertical
 
+import subprocess
+
 from torchard.core.manager import Manager
+from torchard.tui.views.session_list import _write_switch
 
 
 class NewTabScreen(Screen):
@@ -60,6 +63,9 @@ class NewTabScreen(Screen):
             error_widget.update(f"[red]{exc}[/red]")
             return
 
+        # Launch claude in the new window
+        subprocess.run(["tmux", "send-keys", "-t", f"{self._session_name}:{branch_name}", "claude", "Enter"])
+        _write_switch({"type": "session", "target": self._session_name})
         self.app.exit()
 
     def action_cancel(self) -> None:
