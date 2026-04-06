@@ -128,6 +128,7 @@ class SessionListScreen(Screen):
         table = self.query_one(DataTable)
         table.add_columns("Session", "Repo", "Base Branch", "Windows", "")
         self._refresh_table()
+        table.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "session-filter":
