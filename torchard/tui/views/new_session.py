@@ -12,7 +12,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Static
 
 from torchard.core import tmux
-from torchard.core.db import get_repos, get_session_by_name
+from torchard.core.db import get_session_by_name
 from torchard.core.git import GitError, list_branches
 from torchard.core.manager import Manager
 from torchard.core.models import Repo
@@ -172,8 +172,15 @@ class NewSessionScreen(Screen):
         fi.placeholder = "Filter repos…"
         fi.value = ""
 
-        self._repos = get_repos(self._manager._conn)
-        self._populate_repo_list(self._repos)
+        # Scan ~/dev/ for directories (excluding worktrees)
+        self._dev_dirs: list[tuple[str, str]] = []  # (name, path)
+        dev_dir = Path.home() / "dev"
+        if dev_dir.is_dir():
+            for entry in sorted(dev_dir.iterdir()):
+                if entry.is_dir() and entry.name != "worktrees":
+                    self._dev_dirs.append((entry.name, str(entry)))
+
+        self._populate_repo_list_from_dirs(self._dev_dirs)
         fi.focus()
 
     def _render_branch_step(self) -> None:
@@ -212,13 +219,16 @@ class NewSessionScreen(Screen):
     # List population
     # ------------------------------------------------------------------
 
-    def _populate_repo_list(self, repos: list[Repo]) -> None:
+    def _populate_repo_list_from_dirs(self, dirs: list[tuple[str, str]]) -> None:
         self._render_seq += 1
         seq = self._render_seq
+        self._id_to_dir: dict[str, tuple[str, str]] = {}
         lv = self.query_one("#item-list", ListView)
         lv.clear()
-        for repo in repos:
-            lv.append(ListItem(Label(f"[bold]{repo.name}[/bold]  [dim]{repo.path}[/dim]"), id=f"repo-{repo.id}-{seq}"))
+        for name, path in dirs:
+            widget_id = f"dir-{_safe_id(name)}-{seq}"
+            self._id_to_dir[widget_id] = (name, path)
+            lv.append(ListItem(Label(f"[bold]{name}[/bold]  [dim]{path}[/dim]"), id=widget_id))
         lv.append(ListItem(Label("[green]+ Add new repo path…[/green]"), id=f"add-repo-{seq}"))
 
     def _populate_branch_list(self, branches: list[str], query: str) -> None:
@@ -243,8 +253,8 @@ class NewSessionScreen(Screen):
             return
         query = event.value.lower()
         if self._step == 1:
-            filtered = [r for r in self._repos if query in r.name.lower() or query in r.path.lower()]
-            self._populate_repo_list(filtered)
+            filtered = [(n, p) for n, p in self._dev_dirs if query in n.lower() or query in p.lower()]
+            self._populate_repo_list_from_dirs(filtered)
         elif self._step == 2:
             filtered = [b for b in self._branches if query in b.lower()]
             self._populate_branch_list(filtered, event.value)
@@ -289,14 +299,18 @@ class NewSessionScreen(Screen):
         if item_id and item_id.startswith("add-repo"):
             self._enter_repo_path_mode()
             return
-        if item_id and item_id.startswith("repo-"):
-            parts = item_id.split("-")
-            repo_id = int(parts[1])
-            repo = next((r for r in self._repos if r.id == repo_id), None)
-            if repo is not None:
-                self._selected_repo = repo
-                self._step = 2
-                self._render_step()
+        if item_id and item_id in self._id_to_dir:
+            name, path = self._id_to_dir[item_id]
+
+            class _DirRepo:
+                def __init__(self, n: str, p: str) -> None:
+                    self.path = p
+                    self.name = n
+                    self.id = None
+
+            self._selected_repo = _DirRepo(name, path)  # type: ignore[assignment]
+            self._step = 2
+            self._render_step()
 
     def _select_branch_item(self, item_id: str | None) -> None:
         if item_id and item_id.startswith("new-branch"):
