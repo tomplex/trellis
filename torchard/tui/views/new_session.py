@@ -18,6 +18,11 @@ from torchard.core.manager import Manager
 from torchard.core.models import Repo
 
 
+def _safe_id(text: str) -> str:
+    """Sanitize a string for use as a textual widget ID."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
+
+
 def _sanitize_for_tmux(name: str) -> str:
     """Remove/replace characters not allowed in tmux session names."""
     # tmux session names can't contain dots or colons
@@ -102,6 +107,7 @@ class NewSessionScreen(Screen):
         # When True the filter input is being used to collect a raw filesystem path
         self._awaiting_repo_path = False
         self._render_seq = 0  # uniquify widget IDs across re-renders
+        self._id_to_branch: dict[str, str] = {}  # widget id -> actual branch name
 
     # ------------------------------------------------------------------
     # Compose
@@ -218,10 +224,13 @@ class NewSessionScreen(Screen):
     def _populate_branch_list(self, branches: list[str], query: str) -> None:
         self._render_seq += 1
         seq = self._render_seq
+        self._id_to_branch.clear()
         lv = self.query_one("#item-list", ListView)
         lv.clear()
         for branch in branches:
-            lv.append(ListItem(Label(branch), id=f"branch-{branch}-{seq}"))
+            widget_id = f"branch-{_safe_id(branch)}-{seq}"
+            self._id_to_branch[widget_id] = branch
+            lv.append(ListItem(Label(branch), id=widget_id))
         if query and query not in branches:
             lv.append(ListItem(Label(f"[green]+ New branch: [bold]{query}[/bold][/green]"), id=f"new-branch-{seq}"))
 
@@ -297,10 +306,8 @@ class NewSessionScreen(Screen):
                 self._step = 3
                 self._render_step()
             return
-        if item_id and item_id.startswith("branch-"):
-            # id format: branch-{name}-{seq}; strip the last -{seq} part
-            branch = "-".join(item_id.split("-")[1:-1])
-            self._selected_branch = branch
+        if item_id and item_id in self._id_to_branch:
+            self._selected_branch = self._id_to_branch[item_id]
             self._step = 3
             self._render_step()
 

@@ -10,10 +10,17 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Static
 
+import re
+
 from torchard.core.db import get_repos
 from torchard.core.git import GitError, list_branches
 from torchard.core.manager import Manager
 from torchard.core.models import Repo
+
+
+def _safe_id(text: str) -> str:
+    """Sanitize a string for use as a textual widget ID."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
 
 
 class AdoptSessionScreen(Screen):
@@ -69,6 +76,7 @@ class AdoptSessionScreen(Screen):
         self._branches: list[str] = []
         self._awaiting_repo_path = False
         self._render_seq = 0  # uniquify widget IDs across re-renders
+        self._id_to_branch: dict[str, str] = {}  # widget id -> actual branch name
 
     def compose(self) -> ComposeResult:
         with Vertical(id="adopt-container"):
@@ -136,10 +144,13 @@ class AdoptSessionScreen(Screen):
     def _populate_branch_list(self, branches: list[str], query: str) -> None:
         self._render_seq += 1
         seq = self._render_seq
+        self._id_to_branch.clear()
         lv = self.query_one("#adopt-list", ListView)
         lv.clear()
         for branch in branches:
-            lv.append(ListItem(Label(branch), id=f"branch-{branch}-{seq}"))
+            widget_id = f"branch-{_safe_id(branch)}-{seq}"
+            self._id_to_branch[widget_id] = branch
+            lv.append(ListItem(Label(branch), id=widget_id))
         if query and query not in branches:
             lv.append(ListItem(Label(f"[green]+ New branch: [bold]{query}[/bold][/green]"), id=f"new-branch-{seq}"))
 
@@ -201,10 +212,8 @@ class AdoptSessionScreen(Screen):
             if typed:
                 self._adopt(typed)
             return
-        if item_id and item_id.startswith("branch-"):
-            # id format: branch-{name}-{seq}; strip the last -{seq} part
-            branch = "-".join(item_id.split("-")[1:-1])
-            self._adopt(branch)
+        if item_id and item_id in self._id_to_branch:
+            self._adopt(self._id_to_branch[item_id])
 
     def _adopt(self, base_branch: str) -> None:
         assert self._selected_repo is not None
