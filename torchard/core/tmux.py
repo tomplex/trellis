@@ -105,10 +105,10 @@ def rename_session(old_name: str, new_name: str) -> None:
 
 
 def list_windows(session_name: str) -> list[dict]:
-    """Return windows in a session with index, name, and current path."""
+    """Return windows in a session with index, name, current path, and running command."""
     result = _run([
         "tmux", "list-windows", "-t", session_name,
-        "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}",
+        "-F", "#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}",
     ])
     if result.returncode != 0:
         return []
@@ -116,8 +116,10 @@ def list_windows(session_name: str) -> list[dict]:
     for line in result.stdout.strip().splitlines():
         if not line:
             continue
-        index, name, path = line.split("\t")
-        windows.append({"index": int(index), "name": name, "path": path})
+        parts = line.split("\t")
+        index, name, path = parts[0], parts[1], parts[2]
+        command = parts[3] if len(parts) > 3 else ""
+        windows.append({"index": int(index), "name": name, "path": path, "command": command})
     return windows
 
 

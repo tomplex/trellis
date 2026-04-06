@@ -161,9 +161,15 @@ class SessionListScreen(Screen):
                     is_last = i == len(tmux_windows) - 1
                     prefix = "└" if is_last else "├"
                     wt_branch = wt_by_path.get(win["path"])
-                    detail = f"[dim]{_truncate(win['path'], 40)}[/dim]"
+                    cmd = win.get("command", "")
+                    cmd_display = f"[italic]{cmd}[/italic]" if cmd and cmd != "zsh" else ""
+                    detail_parts = []
                     if wt_branch:
-                        detail = f"[dim]wt:[/dim] {wt_branch}  {detail}"
+                        detail_parts.append(f"[dim]wt:[/dim] {wt_branch}")
+                    if cmd_display:
+                        detail_parts.append(cmd_display)
+                    detail_parts.append(f"[dim]{_truncate(win['path'], 40)}[/dim]")
+                    detail = "  ".join(detail_parts)
                     table.add_row(
                         f"  [dim]{prefix}[/dim] [dim]{win['name']}[/dim]",
                         "",
