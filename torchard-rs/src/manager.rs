@@ -74,12 +74,12 @@ pub fn detect_subsystems(repo_path: &str) -> Vec<String> {
     subsystems
 }
 
-pub struct Manager<'a> {
-    pub conn: &'a Connection,
+pub struct Manager {
+    pub conn: Connection,
 }
 
-impl<'a> Manager<'a> {
-    pub fn new(conn: &'a Connection) -> Self {
+impl Manager {
+    pub fn new(conn: Connection) -> Self {
         Self { conn }
     }
 
@@ -88,13 +88,13 @@ impl<'a> Manager<'a> {
     // ------------------------------------------------------------------
 
     pub fn repos_dir(&self) -> PathBuf {
-        db::get_config(self.conn, "repos_dir")
+        db::get_config(&self.conn, "repos_dir")
             .map(PathBuf::from)
             .unwrap_or_else(|| dirs::home_dir().unwrap().join("dev"))
     }
 
     pub fn worktrees_dir(&self) -> PathBuf {
-        db::get_config(self.conn, "worktrees_dir")
+        db::get_config(&self.conn, "worktrees_dir")
             .map(PathBuf::from)
             .unwrap_or_else(|| dirs::home_dir().unwrap().join("dev").join("worktrees"))
     }
@@ -112,25 +112,25 @@ impl<'a> Manager<'a> {
     // ------------------------------------------------------------------
 
     fn get_repo_by_id(&self, repo_id: i64) -> Option<Repo> {
-        db::get_repos(self.conn)
+        db::get_repos(&self.conn)
             .into_iter()
             .find(|r| r.id == Some(repo_id))
     }
 
     fn get_repo_by_path(&self, path: &str) -> Option<Repo> {
-        db::get_repos(self.conn)
+        db::get_repos(&self.conn)
             .into_iter()
             .find(|r| r.path == path)
     }
 
     fn get_session_by_id(&self, session_id: i64) -> Option<Session> {
-        db::get_sessions(self.conn)
+        db::get_sessions(&self.conn)
             .into_iter()
             .find(|s| s.id == Some(session_id))
     }
 
     fn get_worktree_by_id(&self, worktree_id: i64) -> Option<Worktree> {
-        db::get_worktrees(self.conn)
+        db::get_worktrees(&self.conn)
             .into_iter()
             .find(|wt| wt.id == Some(worktree_id))
     }
@@ -146,7 +146,7 @@ impl<'a> Manager<'a> {
             .to_string_lossy()
             .to_string();
         db::add_repo(
-            self.conn,
+            &self.conn,
             &Repo {
                 id: None,
                 path: repo_path.to_string(),
@@ -191,7 +191,7 @@ impl<'a> Manager<'a> {
         };
 
         let session = db::add_session(
-            self.conn,
+            &self.conn,
             &Session {
                 id: None,
                 name: session_name.to_string(),
@@ -213,7 +213,7 @@ impl<'a> Manager<'a> {
         // Record worktree if we created one
         if start_dir != repo_path {
             db::add_worktree(
-                self.conn,
+                &self.conn,
                 &Worktree {
                     id: None,
                     repo_id: repo.id.unwrap(),
@@ -239,7 +239,7 @@ impl<'a> Manager<'a> {
         let repo = self.get_or_create_repo(repo_path);
 
         db::add_session(
-            self.conn,
+            &self.conn,
             &Session {
                 id: None,
                 name: session_name.to_string(),
@@ -261,7 +261,7 @@ impl<'a> Manager<'a> {
         let _ = tmux::rename_session(&session.name, new_name);
 
         // Rename in DB
-        self.conn
+        &self.conn
             .execute(
                 "UPDATE sessions SET name = ?1 WHERE id = ?2",
                 params![new_name, session_id],
@@ -280,7 +280,7 @@ impl<'a> Manager<'a> {
             .get_session_by_id(session_id)
             .ok_or_else(|| format!("Session {} not found", session_id))?;
 
-        self.conn
+        &self.conn
             .execute(
                 "UPDATE sessions SET base_branch = ?1 WHERE id = ?2",
                 params![base_branch, session_id],
@@ -339,7 +339,7 @@ impl<'a> Manager<'a> {
 
         // Create session
         let session = db::add_session(
-            self.conn,
+            &self.conn,
             &Session {
                 id: None,
                 name: session_name.clone(),
@@ -353,7 +353,7 @@ impl<'a> Manager<'a> {
 
         // Record worktree
         db::add_worktree(
-            self.conn,
+            &self.conn,
             &Worktree {
                 id: None,
                 repo_id: repo.id.unwrap(),
@@ -384,7 +384,7 @@ impl<'a> Manager<'a> {
         let _ = tmux::new_window(&session.name, branch_name, Some(&wt_path));
 
         let worktree = db::add_worktree(
-            self.conn,
+            &self.conn,
             &Worktree {
                 id: None,
                 repo_id: repo.id.unwrap(),
@@ -408,16 +408,16 @@ impl<'a> Manager<'a> {
         let repo = self.get_repo_by_id(session.repo_id);
 
         if cleanup_worktrees {
-            let worktrees = db::get_worktrees_for_session(self.conn, session_id);
+            let worktrees = db::get_worktrees_for_session(&self.conn, session_id);
             for wt in &worktrees {
                 if let Some(ref r) = repo {
                     let _ = git::remove_worktree(&r.path, &wt.path);
                 }
-                db::delete_worktree(self.conn, wt.id.unwrap());
+                db::delete_worktree(&self.conn, wt.id.unwrap());
             }
         } else {
             // Detach worktrees from this session to satisfy FK constraint
-            self.conn
+            &self.conn
                 .execute(
                     "UPDATE worktrees SET session_id = NULL WHERE session_id = ?1",
                     params![session_id],
@@ -426,7 +426,7 @@ impl<'a> Manager<'a> {
         }
 
         let _ = tmux::kill_session(&session.name);
-        db::delete_session(self.conn, session_id);
+        db::delete_session(&self.conn, session_id);
 
         Ok(())
     }
@@ -443,14 +443,14 @@ impl<'a> Manager<'a> {
 
         git::remove_worktree(&repo.path, &wt.path)
             .map_err(|e| format!("Failed to remove worktree: {}", e))?;
-        db::delete_worktree(self.conn, worktree_id);
+        db::delete_worktree(&self.conn, worktree_id);
 
         Ok(())
     }
 
     /// Return worktrees whose branch is merged or whose remote branch is deleted.
     pub fn get_stale_worktrees(&self) -> Vec<Worktree> {
-        let all_worktrees = db::get_worktrees(self.conn);
+        let all_worktrees = db::get_worktrees(&self.conn);
         let mut stale = Vec::new();
 
         for wt in all_worktrees {
@@ -473,7 +473,7 @@ impl<'a> Manager<'a> {
 
     /// Return DB sessions enriched with live tmux state, plus unmanaged live sessions.
     pub fn list_sessions(&self) -> Vec<SessionInfo> {
-        let db_sessions = db::get_sessions(self.conn);
+        let db_sessions = db::get_sessions(&self.conn);
         let live_list = tmux::list_sessions();
         let live_by_name: HashMap<String, &tmux::TmuxSession> = live_list
             .iter()
@@ -548,7 +548,7 @@ impl<'a> Manager<'a> {
                         .to_string_lossy()
                         .to_string();
                     let repo = db::add_repo(
-                        self.conn,
+                        &self.conn,
                         &Repo {
                             id: None,
                             path: path_str.clone(),
@@ -608,7 +608,7 @@ impl<'a> Manager<'a> {
                         let default_branch = git::detect_default_branch(&repo_path_candidate)
                             .unwrap_or_else(|_| "main".into());
                         let repo = db::add_repo(
-                            self.conn,
+                            &self.conn,
                             &Repo {
                                 id: None,
                                 path: repo_path_candidate.clone(),
@@ -629,7 +629,7 @@ impl<'a> Manager<'a> {
                     .to_string_lossy()
                     .to_string();
                 db::add_worktree(
-                    self.conn,
+                    &self.conn,
                     &Worktree {
                         id: None,
                         repo_id: repo.id.unwrap(),
@@ -646,7 +646,7 @@ impl<'a> Manager<'a> {
     }
 
     fn scan_tmux_sessions(&self, known_repos: &HashMap<String, Repo>) {
-        let known_session_names: HashSet<String> = db::get_sessions(self.conn)
+        let known_session_names: HashSet<String> = db::get_sessions(&self.conn)
             .into_iter()
             .map(|s| s.name)
             .collect();
@@ -664,7 +664,7 @@ impl<'a> Manager<'a> {
             }
             if let Some(repo) = matched_repo {
                 db::add_session(
-                    self.conn,
+                    &self.conn,
                     &Session {
                         id: None,
                         name: ts.name.clone(),
@@ -683,11 +683,11 @@ impl<'a> Manager<'a> {
     pub fn scan_existing(&self) {
         let home_dev = self.repos_dir();
         let worktrees_root = self.worktrees_dir();
-        let mut known_repos: HashMap<String, Repo> = db::get_repos(self.conn)
+        let mut known_repos: HashMap<String, Repo> = db::get_repos(&self.conn)
             .into_iter()
             .map(|r| (r.path.clone(), r))
             .collect();
-        let mut known_worktree_paths: HashSet<String> = db::get_worktrees(self.conn)
+        let mut known_worktree_paths: HashSet<String> = db::get_worktrees(&self.conn)
             .into_iter()
             .map(|wt| wt.path)
             .collect();
@@ -702,22 +702,22 @@ impl<'a> Manager<'a> {
     // ------------------------------------------------------------------
 
     pub fn get_repos(&self) -> Vec<Repo> {
-        db::get_repos(self.conn)
+        db::get_repos(&self.conn)
     }
 
     pub fn get_sessions(&self) -> Vec<Session> {
-        db::get_sessions(self.conn)
+        db::get_sessions(&self.conn)
     }
 
     pub fn get_worktrees_for_session(&self, session_id: i64) -> Vec<Worktree> {
-        db::get_worktrees_for_session(self.conn, session_id)
+        db::get_worktrees_for_session(&self.conn, session_id)
     }
 
     pub fn touch_session(&self, session_id: i64) {
-        db::touch_session(self.conn, session_id);
+        db::touch_session(&self.conn, session_id);
     }
 
     pub fn get_session_by_name(&self, name: &str) -> Option<Session> {
-        db::get_session_by_name(self.conn, name)
+        db::get_session_by_name(&self.conn, name)
     }
 }
