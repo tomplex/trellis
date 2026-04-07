@@ -113,6 +113,29 @@ def rename_session(old_name: str, new_name: str) -> None:
         )
 
 
+def list_all_windows() -> dict[str, list[dict]]:
+    """Return all windows across all sessions, keyed by session name. Single tmux call."""
+    result = _run([
+        "tmux", "list-windows", "-a",
+        "-F", "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
+    ])
+    if result.returncode != 0:
+        return {}
+    by_session: dict[str, list[dict]] = {}
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        session_name = parts[0]
+        index, name, path = parts[1], parts[2], parts[3]
+        command = parts[4] if len(parts) > 4 else ""
+        pane_pid = parts[5] if len(parts) > 5 else ""
+        by_session.setdefault(session_name, []).append(
+            {"index": int(index), "name": name, "path": path, "command": command, "pane_pid": pane_pid}
+        )
+    return by_session
+
+
 def list_windows(session_name: str) -> list[dict]:
     """Return windows in a session with index, name, current path, running command, and pane PID."""
     result = _run([
@@ -146,6 +169,12 @@ def send_keys(target: str, *keys: str) -> None:
     """Send keys to a tmux target (e.g. 'session:window')."""
     _run(["tmux", "send-keys", "-t", target, *keys])
 
+
+
+def capture_pane(target: str, lines: int = 5) -> str:
+    """Capture the last N lines of a pane's visible content."""
+    result = _run(["tmux", "capture-pane", "-t", target, "-p", "-J", f"-S", f"-{lines}"])
+    return result.stdout if result.returncode == 0 else ""
 
 
 def get_pane_pid(target: str) -> str | None:

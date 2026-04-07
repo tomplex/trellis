@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -39,6 +40,36 @@ def summarize_message(message: str, max_words: int = 4) -> str:
     if len(name) > 30:
         name = name[:30].rsplit("-", 1)[0]
     return name or "claude"
+
+
+def classify_pane(pane_text: str) -> str:
+    """Classify a claude pane's state from its captured terminal content.
+
+    Returns one of: "thinking", "working", "waiting", "prompting", "idle"
+    """
+    lines = [l.strip() for l in pane_text.strip().splitlines() if l.strip()]
+    if not lines:
+        return "idle"
+
+    tail = "\n".join(lines[-6:])
+
+    # Actively generating output
+    if "Generating" in tail or "Streaming" in tail:
+        return "thinking"
+
+    # Running a tool
+    if re.search(r"Running", tail) and re.search(r"⏺|⎿", tail):
+        return "working"
+
+    # Waiting for permission / confirmation
+    if "Enter to confirm" in tail or "to approve" in tail or re.search(r"[Yy]es.*[Nn]o", tail):
+        return "prompting"
+
+    # At the input prompt (❯ with status bar)
+    if re.search(r"^❯\s*$", tail, re.MULTILINE):
+        return "waiting"
+
+    return "idle"
 
 
 def _first_user_message(jsonl_path: Path) -> str | None:

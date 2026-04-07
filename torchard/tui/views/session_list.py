@@ -11,24 +11,12 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Input
 
 from torchard.core import tmux
-from torchard.core.claude_session import get_session_id, get_first_user_message, summarize_message
+from torchard.core.claude_session import classify_pane, get_session_id, get_first_user_message, summarize_message
 from torchard.core.models import SessionInfo
 from torchard.core.fuzzy import fuzzy_match
 from torchard.core.manager import Manager
 from torchard.tui.utils import truncate_end
 from torchard.tui.switch import write_switch
-from torchard.tui.views.action_menu import ActionMenu
-from torchard.tui.views.adopt_session import AdoptSessionScreen
-from torchard.tui.views.cleanup import CleanupScreen
-from torchard.tui.views.confirm import ConfirmModal
-from torchard.tui.views.edit_branch import EditBranchScreen
-from torchard.tui.views.help import HelpScreen
-from torchard.tui.views.history import HistoryScreen
-from torchard.tui.views.new_session import NewSessionScreen
-from torchard.tui.views.new_tab import NewTabScreen
-from torchard.tui.views.rename_session import RenameSessionScreen, RenameWindowScreen
-from torchard.tui.views.settings import SettingsScreen
-from torchard.tui.views.review import ReviewScreen
 
 # Consistent colors for repos - assigned by hash of repo name
 _REPO_COLORS = [
@@ -165,7 +153,7 @@ class SessionListScreen(Screen):
         sessions.sort(key=lambda s: self._session_sort_key(s, grouped=True))
         return sessions
 
-    def _render_session_rows(self, table: DataTable) -> None:
+    def _render_session_rows(self, table: DataTable, all_windows: dict[str, list[dict]]) -> None:
         """Populate the DataTable with rows for each session (and expanded child windows)."""
         last_repo_name = None
         for session in self._sessions:
@@ -218,7 +206,7 @@ class SessionListScreen(Screen):
             )
 
             if expanded and session.live:
-                tmux_windows = tmux.list_windows(session.name)
+                tmux_windows = all_windows.get(session.name, [])
                 wt_by_path: dict[str, str] = {}
                 if session.managed and session.id is not None:
                     for wt in self._manager.get_worktrees_for_session(session.id):
@@ -232,7 +220,16 @@ class SessionListScreen(Screen):
                     if is_claude and re.match(r"^\d+\.\d+\.\d+", win["name"]):
                         _try_rename_claude_window(session.name, win)
                     if is_claude:
-                        cmd_display = "[#E87B35]✦ claude[/#E87B35]"
+                        pane_text = tmux.capture_pane(f"{session.name}:{win['index']}", 8)
+                        state = classify_pane(pane_text)
+                        state_display = {
+                            "thinking": "[#E87B35]✦ thinking…[/#E87B35]",
+                            "working": "[#E87B35]✦ working…[/#E87B35]",
+                            "prompting": "[#ff6b6b]✦ needs input[/#ff6b6b]",
+                            "waiting": "[#E87B35]✦ waiting[/#E87B35]",
+                            "idle": "[dim]✦ idle[/dim]",
+                        }
+                        cmd_display = state_display.get(state, "[#E87B35]✦ claude[/#E87B35]")
                     elif cmd and cmd != "zsh":
                         cmd_display = f"[italic]{cmd}[/italic]"
                     else:
@@ -248,10 +245,11 @@ class SessionListScreen(Screen):
     def _refresh_table(self, restore_key: str | None = None) -> None:
         self._repos = {r.id: r for r in self._manager.get_repos()}
         self._sessions = self._sorted_sessions()
+        all_windows = tmux.list_all_windows()
 
         table = self.query_one(DataTable)
         table.clear()
-        self._render_session_rows(table)
+        self._render_session_rows(table, all_windows)
 
         if self._sessions:
             target_row = 0
@@ -357,6 +355,7 @@ class SessionListScreen(Screen):
     # ------------------------------------------------------------------
 
     def action_new_picker(self) -> None:
+        from torchard.tui.views.action_menu import ActionMenu
         session = self._current_session()
         items: list[tuple[str, str, str]] = [
             ("new-session", "New session", ""),
@@ -373,10 +372,13 @@ class SessionListScreen(Screen):
             return
         session = self._current_session()
         if key == "new-session":
+            from torchard.tui.views.new_session import NewSessionScreen
             self.app.push_screen(NewSessionScreen(self._manager))
         elif key == "new-tab" and session and session.managed:
+            from torchard.tui.views.new_tab import NewTabScreen
             self.app.push_screen(NewTabScreen(self._manager, session.id, session.name))
         elif key == "review" and session and session.repo_id:
+            from torchard.tui.views.review import ReviewScreen
             repo = self._repos.get(session.repo_id)
             if repo:
                 self.app.push_screen(ReviewScreen(self._manager, repo.path, repo.name))
@@ -386,6 +388,7 @@ class SessionListScreen(Screen):
     # ------------------------------------------------------------------
 
     def action_delete(self) -> None:
+        from torchard.tui.views.confirm import ConfirmModal
         row_key = self._current_row_key()
         if row_key is None:
             return
@@ -451,6 +454,7 @@ class SessionListScreen(Screen):
     # ------------------------------------------------------------------
 
     def action_action_menu(self) -> None:
+        from torchard.tui.views.action_menu import ActionMenu
         row_key = self._current_row_key()
         if row_key is None:
             return
@@ -465,7 +469,7 @@ class SessionListScreen(Screen):
             items: list[tuple[str, str, str]] = []
             if win:
                 items.append(("rename-tab", "Rename tab", win["name"]))
-            self.app.push_screen(ActionMenu(f"Tab actions", items), self._on_action_picked)
+            self.app.push_screen(ActionMenu("Tab actions", items), self._on_action_picked)
             return
 
         session = self._current_session()
@@ -491,6 +495,7 @@ class SessionListScreen(Screen):
         session = self._current_session()
 
         if key == "rename-tab" and row_key and row_key.startswith("win:"):
+            from torchard.tui.views.rename_session import RenameWindowScreen
             parts = row_key.split(":", 2)
             session_name = parts[1]
             window_index = int(parts[2])
@@ -503,8 +508,10 @@ class SessionListScreen(Screen):
         if session is None:
             return
         if key == "rename" and session.managed:
+            from torchard.tui.views.rename_session import RenameSessionScreen
             self.app.push_screen(RenameSessionScreen(self._manager, session.id, session.name))
         elif key == "branch" and session.managed:
+            from torchard.tui.views.edit_branch import EditBranchScreen
             self.app.push_screen(EditBranchScreen(self._manager, session.id, session.name))
         elif key == "claude" and session.live:
             tmux.new_window(session.name, "claude")
@@ -514,8 +521,10 @@ class SessionListScreen(Screen):
             write_switch({"type": "session", "target": session.name})
             self.app.exit()
         elif key == "adopt" and not session.managed:
+            from torchard.tui.views.adopt_session import AdoptSessionScreen
             self.app.push_screen(AdoptSessionScreen(self._manager, session.name))
         elif key == "cleanup":
+            from torchard.tui.views.cleanup import CleanupScreen
             self.app.push_screen(CleanupScreen(self._manager))
 
     def action_history(self) -> None:
@@ -535,12 +544,15 @@ class SessionListScreen(Screen):
                 paths.append(wt_root)
                 scope_paths = paths
                 scope_label = session.name
+        from torchard.tui.views.history import HistoryScreen
         self.app.push_screen(HistoryScreen(self._manager, scope_paths, scope_label))
 
     def action_settings(self) -> None:
+        from torchard.tui.views.settings import SettingsScreen
         self.app.push_screen(SettingsScreen(self._manager))
 
     def action_help(self) -> None:
+        from torchard.tui.views.help import HelpScreen
         self.app.push_screen(HelpScreen())
 
 
@@ -559,8 +571,3 @@ def _try_rename_claude_window(session_name: str, win: dict) -> None:
         win["name"] = name
     except tmux.TmuxError:
         pass
-
-
-
-
-
