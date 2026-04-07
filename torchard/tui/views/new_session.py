@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from textual.app import ComposeResult
@@ -16,19 +15,7 @@ from torchard.core.db import get_session_by_name
 from torchard.core.git import GitError, detect_default_branch, list_branches
 from torchard.core.manager import Manager, detect_subsystems
 from torchard.core.models import Repo
-
-
-def _safe_id(text: str) -> str:
-    """Sanitize a string for use as a textual widget ID."""
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
-
-
-def _sanitize_for_tmux(name: str) -> str:
-    """Remove/replace characters not allowed in tmux session names."""
-    # tmux session names can't contain dots or colons
-    name = re.sub(r"[.:]", "-", name)
-    name = name.strip(" -")
-    return name or "new-session"
+from torchard.tui.utils import safe_id
 
 
 class NewSessionScreen(Screen):
@@ -218,7 +205,7 @@ class NewSessionScreen(Screen):
         self._set_hint("Edit the name then press Enter to create. Escape to go back.")
         self._show_name_widgets()
 
-        suggested = _sanitize_for_tmux(self._selected_branch)
+        suggested = tmux.sanitize_session_name(self._selected_branch)
         ni = self.query_one("#session-name-input", Input)
         ni.value = suggested
         ni.placeholder = "Session name…"
@@ -236,7 +223,7 @@ class NewSessionScreen(Screen):
         lv = self.query_one("#item-list", ListView)
         lv.clear()
         for name, path in dirs:
-            widget_id = f"dir-{_safe_id(name)}-{seq}"
+            widget_id = f"dir-{safe_id(name)}-{seq}"
             self._id_to_dir[widget_id] = (name, path)
             lv.append(ListItem(Label(f"[bold]{name}[/bold]  [dim]{path}[/dim]"), id=widget_id))
         lv.append(ListItem(Label("[green]+ Add new repo path…[/green]"), id=f"add-repo-{seq}"))
@@ -248,7 +235,7 @@ class NewSessionScreen(Screen):
         lv = self.query_one("#item-list", ListView)
         lv.clear()
         for branch in branches:
-            widget_id = f"branch-{_safe_id(branch)}-{seq}"
+            widget_id = f"branch-{safe_id(branch)}-{seq}"
             self._id_to_branch[widget_id] = branch
             lv.append(ListItem(Label(branch), id=widget_id))
         if query and query not in branches:
@@ -344,7 +331,7 @@ class NewSessionScreen(Screen):
             base = self._selected_repo.name
         else:
             base = self._selected_branch
-        name = _sanitize_for_tmux(base)
+        name = tmux.sanitize_session_name(base)
         # Deduplicate if a session with this name already exists
         if get_session_by_name(self._manager._conn, name) is None:
             return name
@@ -420,7 +407,7 @@ class NewSessionScreen(Screen):
         self._id_to_subsystem[root_id] = ""
         lv.append(ListItem(Label("[bold]/ (root)[/bold]"), id=root_id))
         for sub in subsystems:
-            widget_id = f"subsys-{_safe_id(sub)}-{seq}"
+            widget_id = f"subsys-{safe_id(sub)}-{seq}"
             self._id_to_subsystem[widget_id] = sub
             lv.append(ListItem(Label(sub), id=widget_id))
 

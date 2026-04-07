@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -13,11 +11,6 @@ from textual.widgets import Footer, Input, Static
 from torchard.core import tmux
 from torchard.core.db import get_session_by_name
 from torchard.core.manager import Manager
-
-
-def _sanitize_for_tmux(name: str) -> str:
-    name = re.sub(r"[.:]", "-", name)
-    return name.strip(" -")
 
 
 class RenameSessionScreen(Screen):
@@ -53,7 +46,7 @@ class RenameSessionScreen(Screen):
         inp.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        name = _sanitize_for_tmux(event.value.strip())
+        name = tmux.sanitize_session_name(event.value.strip())
         error = self.query_one("#rename-error", Static)
 
         if not name:

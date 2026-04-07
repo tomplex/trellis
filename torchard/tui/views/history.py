@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import subprocess
 
 from textual.app import ComposeResult
@@ -14,16 +13,7 @@ from torchard.core.db import get_repos, get_sessions
 from torchard.core.history import Conversation, filter_by_paths, parse_index
 from torchard.core.manager import Manager
 from torchard.tui.switch import write_switch
-
-
-def _safe_id(text: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
-
-
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
+from torchard.tui.utils import truncate_end
 
 
 class HistoryScreen(Screen):
@@ -110,9 +100,9 @@ class HistoryScreen(Screen):
             proj = entry.project.replace("/Users/tom/", "~/")
             table.add_row(
                 entry.date,
-                _truncate(proj, 40),
-                _truncate(entry.branch, 20),
-                _truncate(entry.summary, 50),
+                truncate_end(proj, 40),
+                truncate_end(entry.branch, 20),
+                truncate_end(entry.summary, 50),
                 key=str(i),
             )
 

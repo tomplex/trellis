@@ -10,6 +10,7 @@ from textual.widgets import DataTable, Footer, Static
 from torchard.core.db import get_sessions, get_worktrees
 from torchard.core.manager import Manager
 from torchard.core.models import Session, Worktree
+from torchard.tui.utils import truncate_start
 from torchard.tui.views.confirm import ConfirmModal
 
 
@@ -83,7 +84,7 @@ class CleanupScreen(Screen):
                 "\\[ ]",
                 wt.branch,
                 session_label,
-                _truncate(wt.path, 50),
+                truncate_start(wt.path, 50),
                 "[dim]checking…[/dim]",
                 key=key,
             )
@@ -260,7 +261,3 @@ def _make_status(wt: Worktree, is_stale: bool) -> str:
     return "[yellow]stale[/yellow]"
 
 
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return "…" + text[-(max_len - 1):]

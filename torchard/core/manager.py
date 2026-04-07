@@ -238,7 +238,7 @@ class Manager:
                 raise
 
         # Sanitize session name
-        session_name = branch.replace(".", "-").replace(":", "-")
+        session_name = tmux.sanitize_session_name(branch)
 
         # Create session
         session = add_session(

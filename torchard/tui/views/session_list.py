@@ -16,6 +16,7 @@ from torchard.core.claude_session import get_session_id, get_first_user_message,
 from torchard.core.db import get_repos, get_worktrees_for_session, touch_session
 from torchard.core.fuzzy import fuzzy_match
 from torchard.core.manager import Manager
+from torchard.tui.utils import truncate_end
 
 # Consistent colors for repos - assigned by hash of repo name
 _REPO_COLORS = [
@@ -279,9 +280,9 @@ class SessionListScreen(Screen):
 
             # Show repo name colored, only on first session in a group (when not filtering)
             if not self._filter and repo_name != last_repo_name and repo_name:
-                repo_display = f"[{color}]{_truncate(repo_name, 20)}[/{color}]"
+                repo_display = f"[{color}]{truncate_end(repo_name, 20)}[/{color}]"
             elif repo_name:
-                repo_display = f"[dim]{_truncate(repo_name, 20)}[/dim]"
+                repo_display = f"[dim]{truncate_end(repo_name, 20)}[/dim]"
             else:
                 repo_display = "[dim]-[/dim]"
             last_repo_name = repo_name
@@ -321,7 +322,7 @@ class SessionListScreen(Screen):
                     if wt_branch:
                         col_detail = f"[dim]wt:[/dim] {wt_branch}"
                     else:
-                        col_detail = f"[dim]{_truncate(win['path'], 30)}[/dim]"
+                        col_detail = f"[dim]{truncate_end(win['path'], 30)}[/dim]"
                     table.add_row(
                         f"      [dim]{prefix}[/dim] [dim]{win['name']}[/dim]",
                         col_cmd,
@@ -643,7 +644,3 @@ def _try_rename_claude_window(session_name: str, win: dict) -> None:
 
 
 
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
