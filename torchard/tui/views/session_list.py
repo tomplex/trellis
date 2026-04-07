@@ -111,30 +111,17 @@ class SessionListScreen(Screen):
     def on_screen_resume(self) -> None:
         self._refresh_table()
 
-    def _session_sort_key(self, s: SessionInfo, grouped: bool) -> tuple:
-        """Composite sort key for sessions.
-
-        Order: "main" pinned first, then sessions with recent activity (newest first),
-        then sessions without activity (alphabetical). When *grouped*, adds repo name
-        as a secondary key so sessions cluster by repo.
-        """
-        is_main = 0 if s.name == "main" else 1
-        has_ts = 0 if s.last_selected_at else 1
-        # Negate timestamp so newest sorts first (lexicographic descending).
-        ts = s.last_selected_at or ""
-        neg_ts = "".join(chr(0x10FFFF - ord(c)) for c in ts) if ts else "~"
-        if grouped:
-            repo = self._repos.get(s.repo_id) if s.repo_id else None
-            repo_name = (repo.name if repo else "zzz").lower()
-            return (is_main, repo_name, has_ts, neg_ts)
-        return (is_main, has_ts, neg_ts)
-
     def _sorted_sessions(self) -> list[SessionInfo]:
-        """Return sessions sorted and filtered for display."""
+        """Return sessions sorted and filtered for display.
+
+        Order: main pinned first, then most recently selected first,
+        then sessions without activity (alphabetical). Sessions are
+        visually grouped by repo via the first-repo-name coloring,
+        but recency takes priority over repo grouping.
+        """
         sessions = self._manager.list_sessions()
 
         if self._filter:
-            # Fuzzy filter: rank by match quality
             scored: list[tuple[SessionInfo, int]] = []
             for session in sessions:
                 repo = self._repos.get(session.repo_id) if session.repo_id else None
@@ -149,8 +136,12 @@ class SessionListScreen(Screen):
             scored.sort(key=lambda x: x[1])
             return [s for s, _ in scored]
 
-        # No filter: sort with repo grouping
-        sessions.sort(key=lambda s: self._session_sort_key(s, grouped=True))
+        # No filter: main pinned, then recency, then alphabetical
+        sessions.sort(key=lambda s: s.last_selected_at or "", reverse=True)
+        sessions.sort(key=lambda s: (
+            0 if s.name == "main" else 1,
+            0 if s.last_selected_at else 1,
+        ))
         return sessions
 
     def _render_session_rows(self, table: DataTable, all_windows: dict[str, list[dict]]) -> None:
@@ -223,10 +214,8 @@ class SessionListScreen(Screen):
                         pane_text = tmux.capture_pane(f"{session.name}:{win['index']}", 8)
                         state = classify_pane(pane_text)
                         state_display = {
-                            "thinking": "[#E87B35]✦ thinking…[/#E87B35]",
                             "working": "[#E87B35]✦ working…[/#E87B35]",
                             "prompting": "[#ff6b6b]✦ needs input[/#ff6b6b]",
-                            "waiting": "[#E87B35]✦ waiting[/#E87B35]",
                             "idle": "[dim]✦ idle[/dim]",
                         }
                         cmd_display = state_display.get(state, "[#E87B35]✦ claude[/#E87B35]")

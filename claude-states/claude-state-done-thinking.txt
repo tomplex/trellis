@@ -1,0 +1,59 @@
+      803 -                                                                                                                                          
+      804 -                                                                                                                                          
+      805 -                                                                                                                                          
+      806 -                                                                                                                                          
+
+⏺ Bash(uv run pytest tests/ -v 2>&1 | tail -5)
+  ⎿  tests/test_tmux.py::TestNewWindow::test_raises_on_failure PASSED         [ 97%]
+     tests/test_tmux.py::TestKillSession::test_kills_session PASSED           [ 98%]
+     tests/test_tmux.py::TestKillSession::test_raises_on_failure PASSED       [100%]
+     … +2 lines (ctrl+o to expand)
+
+⏺ 95 tests pass. Let me complete the merge commit.
+
+⏺ Bash(git add -A && git commit -m "merge origin/main into health-check-20260406")
+  ⎿  [health-check-20260406 306e3f7] merge origin/main into health-check-20260406
+
+⏺ Merge complete. All 95 tests pass, clean working tree.
+
+✻ Baked for 2m 36s
+
+❯ merge main in again please                                                                                                                                
+
+⏺ Bash(git fetch origin && git merge origin/main)
+  ⎿  Merge made by the 'ort' strategy.
+      torchard/core/claude_session.py | 11 ++++++-----
+      1 file changed, 6 insertions(+), 5 deletions(-)
+
+⏺ Clean merge, no conflicts. One file changed (claude_session.py).
+
+❯ great. let's get this merged.                                                                                                                             
+
+⏺ Bash(git log origin/main..HEAD --oneline)
+  ⎿  81234da Merge remote-tracking branch 'origin/main' into health-check-20260406
+     306e3f7 merge origin/main into health-check-20260406
+     8677e3b docs: complete health check — 22 resolved, 4 won't fix
+     … +8 lines (ctrl+o to expand)
+
+⏺ Bash(git push -u origin health-check-20260406)
+  ⎿  remote:
+     remote: Create a pull request for 'health-check-20260406' on GitHub by visiting:
+     remote:      https://github.com/tomplex/torchard/pull/new/health-check-20260406
+     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(gh pr create --title "Codebase health check: 22 findings resolved" --body "$(cat <<'EOF'
+      ## Summary…)
+  ⎿  https://github.com/tomplex/torchard/pull/1
+
+⏺ PR created: tomplex/torchard#1     
+                                                                                          
+✻ Brewed for 31s                                                                                                                                            
+                                                                                                                                                            
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                                                                           
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  health-check-20260406 | health-check-20260406 | clean | github.com/tomplex/torchard/pull/1 ✓                                                              
+  29% | ↑2.7k ↓166k | $31.66 | Opus 4.6 (1M context)                                                                        
+  ⏵⏵ accept edits on (shift+tab to cycle)           
+                                                                                                                                                            
+

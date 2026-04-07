@@ -45,30 +45,28 @@ def summarize_message(message: str, max_words: int = 4) -> str:
 def classify_pane(pane_text: str) -> str:
     """Classify a claude pane's state from its captured terminal content.
 
-    Returns one of: "thinking", "working", "waiting", "prompting", "idle"
+    Returns one of: "idle", "working", "prompting".
+
+    The ``❯`` prompt is always visible, so we can't use it to detect state.
+    Instead we look at the spinner line just above the status bar:
+      - Working: spinner with ``…`` (e.g. "✻ Envisioning…")
+      - Idle: spinner shows past tense with duration (e.g. "✻ Brewed for 31s")
+      - Prompting: permission dialog with numbered choices and "Esc to cancel"
     """
-    lines = [l.strip() for l in pane_text.strip().splitlines() if l.strip()]
-    if not lines:
+    lines = [l for l in pane_text.splitlines() if l.strip()]
+    tail = lines[-10:] if len(lines) > 10 else lines
+    if not tail:
         return "idle"
 
-    tail = "\n".join(lines[-6:])
+    tail_text = "\n".join(tail)
 
-    # Running a tool — check before thinking since tool output may contain spinner-like text
-    if re.search(r"Running", tail) and re.search(r"⏺|⎿", tail):
-        return "working"
-
-    # Actively thinking — claude shows "✶ Boogieing…", "· Beboppin'…", "✢ Generating…", etc.
-    # Single non-ascii char followed by a capitalized word and ellipsis
-    if re.search(r"^\S\s+[A-Z]\w+…", tail, re.MULTILINE):
-        return "thinking"
-
-    # Waiting for permission / confirmation
-    if "Enter to confirm" in tail or "to approve" in tail or re.search(r"[Yy]es.*[Nn]o", tail):
+    # Permission dialog: numbered selection + "Esc to cancel"
+    if re.search(r"❯\s+1\.", tail_text) and "Esc to cancel" in tail_text:
         return "prompting"
 
-    # At the input prompt (❯ with status bar)
-    if re.search(r"^❯\s*$", tail, re.MULTILINE):
-        return "waiting"
+    # Active spinner: a non-ASCII symbol followed by a word ending in … (ellipsis)
+    if re.search(r"[^\x00-\x7f]\s+\S+…", tail_text):
+        return "working"
 
     return "idle"
 
