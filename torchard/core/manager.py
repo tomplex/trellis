@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -98,7 +97,6 @@ class Manager:
         # If the base branch is the repo's default branch, start in the repo root.
         # Otherwise create a worktree for the feature branch.
         default = repo.default_branch
-        created_worktree = False
         if base_branch == default:
             start_dir = repo_path
         else:
@@ -108,7 +106,6 @@ class Manager:
             worktree_path = self._worktree_path(repo.name, base_branch)
             try:
                 git.create_worktree(repo_path, worktree_path, base_branch, default)
-                created_worktree = True
             except git.GitError:
                 # Branch/worktree may already exist - use it if the dir is there
                 if not Path(worktree_path).exists():

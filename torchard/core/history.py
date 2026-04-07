@@ -10,8 +10,6 @@ _HEADER_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) \[([0-9a-f]+)\]")
 _PROJECT_RE = re.compile(r"^- \*\*project\*\*: `(.+)`")
 _BRANCH_RE = re.compile(r"^- \*\*branch\*\*: `(.+)`")
 _INTENT_LINE_RE = re.compile(r"^  - (.+)")
-_FILES_RE = re.compile(r"^- \*\*files\*\*: (.+)")
-
 INDEX_PATH = Path.home() / ".claude" / "conversation-index.md"
 
 
@@ -22,7 +20,6 @@ class Conversation:
     project: str  # directory path
     branch: str
     intents: list[str] = field(default_factory=list)
-    files: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -84,11 +81,6 @@ def parse_index(path: Path | None = None) -> list[Conversation]:
                 continue
             else:
                 in_intent = False
-
-        files = _FILES_RE.match(line)
-        if files:
-            current.files = [f.strip() for f in files.group(1).split(",")]
-            in_intent = False
 
     if current is not None:
         entries.append(current)

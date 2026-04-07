@@ -33,14 +33,3 @@ def fuzzy_match(query: str, text: str) -> int | None:
         return None  # not all characters matched
 
     return score
-
-
-def fuzzy_filter(query: str, items: list[str]) -> list[tuple[str, int]]:
-    """Filter and sort items by fuzzy match quality. Returns (item, score) pairs."""
-    results = []
-    for item in items:
-        score = fuzzy_match(query, item)
-        if score is not None:
-            results.append((item, score))
-    results.sort(key=lambda x: x[1])
-    return results

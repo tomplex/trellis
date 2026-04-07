@@ -9,7 +9,7 @@ class GitError(Exception):
     """Raised when a git command fails."""
 
 
-def _run(args: list[str], cwd: str | None = None, check: bool = False) -> subprocess.CompletedProcess:
+def _run(args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
         capture_output=True,

@@ -17,7 +17,7 @@ class TmuxError(Exception):
     """Raised when a tmux command fails."""
 
 
-def _run(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
         capture_output=True,

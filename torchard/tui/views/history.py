@@ -188,7 +188,6 @@ class HistoryScreen(Screen):
 
         if target_session:
             # Open in existing session
-            from torchard.core import tmux
             subprocess.run([
                 "tmux", "new-window", "-t", target_session,
                 "-n", f"resume-{session_id[:8]}",

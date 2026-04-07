@@ -17,6 +17,18 @@ from torchard.core.db import get_repos, get_worktrees_for_session, touch_session
 from torchard.core.fuzzy import fuzzy_match
 from torchard.core.manager import Manager
 from torchard.tui.utils import truncate_end
+from torchard.tui.switch import write_switch
+from torchard.tui.views.action_menu import ActionMenu
+from torchard.tui.views.adopt_session import AdoptSessionScreen
+from torchard.tui.views.cleanup import CleanupScreen
+from torchard.tui.views.confirm import ConfirmModal
+from torchard.tui.views.edit_branch import EditBranchScreen
+from torchard.tui.views.history import HistoryScreen
+from torchard.tui.views.new_session import NewSessionScreen
+from torchard.tui.views.new_tab import NewTabScreen
+from torchard.tui.views.rename_session import RenameSessionScreen, RenameWindowScreen
+from torchard.tui.views.settings import SettingsScreen
+from torchard.tui.views.review import ReviewScreen
 
 # Consistent colors for repos - assigned by hash of repo name
 _REPO_COLORS = [
@@ -33,18 +45,6 @@ _REPO_COLORS = [
 
 def _repo_color(repo_name: str) -> str:
     return _REPO_COLORS[hash(repo_name) % len(_REPO_COLORS)]
-from torchard.tui.switch import write_switch
-from torchard.tui.views.action_menu import ActionMenu
-from torchard.tui.views.adopt_session import AdoptSessionScreen
-from torchard.tui.views.cleanup import CleanupScreen
-from torchard.tui.views.confirm import ConfirmModal
-from torchard.tui.views.edit_branch import EditBranchScreen
-from torchard.tui.views.history import HistoryScreen
-from torchard.tui.views.new_session import NewSessionScreen
-from torchard.tui.views.new_tab import NewTabScreen
-from torchard.tui.views.rename_session import RenameSessionScreen, RenameWindowScreen
-from torchard.tui.views.settings import SettingsScreen
-from torchard.tui.views.review import ReviewScreen
 
 
 _HELP_TEXT = """\
