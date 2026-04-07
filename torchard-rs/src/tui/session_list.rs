@@ -931,7 +931,10 @@ impl SessionListScreen {
             ("n", "New"),
             ("r", "Review"),
             ("d", "Delete"),
+            ("h", "History"),
             (".", "Actions"),
+            ("c", "Cleanup"),
+            ("S", "Settings"),
             ("?", "Help"),
         ];
 

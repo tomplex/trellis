@@ -48,6 +48,7 @@ pub enum BackgroundResult {
 pub trait ScreenBehavior {
     fn render(&self, f: &mut Frame, area: Rect, manager: &Manager);
     fn handle_event(&mut self, event: &Event, manager: &mut Manager) -> ScreenAction;
+    fn tick(&mut self, _manager: &mut Manager) -> ScreenAction { ScreenAction::None }
     fn on_child_result(&mut self, _result: ActionResult, _manager: &mut Manager) -> ScreenAction {
         ScreenAction::None
     }
@@ -160,6 +161,12 @@ impl App {
             terminal
                 .draw(|f| self.render(f))
                 .expect("draw");
+
+            // Tick the top screen (for background work like staleness checks)
+            if let Some(top) = self.screen_stack.last_mut() {
+                let action = top.behavior_mut().tick(&mut self.manager);
+                self.process_action(action);
+            }
 
             // Check for background results
             while let Ok(result) = self.bg_rx.try_recv() {

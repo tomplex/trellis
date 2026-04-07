@@ -1,13 +1,16 @@
 // torchard-rs/src/tui/cleanup.rs — worktree cleanup screen
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState};
 
 use crate::db;
+use crate::git;
 use crate::manager::Manager;
+use crate::models::Worktree;
 use crate::utils::truncate_start;
 
 use super::confirm::ConfirmScreen;
@@ -19,7 +22,7 @@ struct WorktreeRow {
     branch: String,
     session_name: String,
     path: String,
-    stale: bool,
+    stale: Option<bool>, // None = still checking
 }
 
 pub struct CleanupScreen {
@@ -28,6 +31,7 @@ pub struct CleanupScreen {
     table_state: TableState,
     error_message: Option<String>,
     pending_delete: bool,
+    stale_rx: Option<mpsc::Receiver<HashSet<i64>>>,
 }
 
 impl CleanupScreen {
@@ -41,16 +45,9 @@ impl CleanupScreen {
             .filter_map(|s| s.id.map(|id| (id, s.name.clone())))
             .collect();
 
-        // Get stale worktrees
-        let stale_worktrees = manager.get_stale_worktrees();
-        let stale_ids: HashSet<i64> = stale_worktrees
-            .iter()
-            .filter_map(|wt| wt.id)
-            .collect();
-
-        // Build rows
+        // Build rows immediately with stale=None (checking)
         let mut rows: Vec<WorktreeRow> = worktrees
-            .into_iter()
+            .iter()
             .filter_map(|wt| {
                 let wt_id = wt.id?;
                 let session_name = wt
@@ -59,10 +56,10 @@ impl CleanupScreen {
                     .unwrap_or_else(|| "Unattached".to_string());
                 Some(WorktreeRow {
                     wt_id,
-                    branch: wt.branch,
+                    branch: wt.branch.clone(),
                     session_name,
-                    path: wt.path,
-                    stale: stale_ids.contains(&wt_id),
+                    path: wt.path.clone(),
+                    stale: None, // checking in background
                 })
             })
             .collect();
@@ -80,12 +77,48 @@ impl CleanupScreen {
             table_state.select(Some(0));
         }
 
+        // Spawn background thread for staleness check
+        let (tx, rx) = mpsc::channel();
+        let owned_worktrees: Vec<Worktree> = worktrees;
+        let repos = manager.get_repos();
+        std::thread::spawn(move || {
+            let repo_map: HashMap<i64, crate::models::Repo> = repos
+                .into_iter()
+                .filter_map(|r| r.id.map(|id| (id, r)))
+                .collect();
+            let mut stale_ids = HashSet::new();
+            for wt in &owned_worktrees {
+                let Some(wt_id) = wt.id else { continue };
+                let Some(repo) = repo_map.get(&wt.repo_id) else { continue };
+                let merged = git::is_branch_merged(&repo.path, &wt.branch, &repo.default_branch)
+                    .unwrap_or(false);
+                let has_remote = git::has_remote_branch(&repo.path, &wt.branch)
+                    .unwrap_or(true);
+                if merged || !has_remote {
+                    stale_ids.insert(wt_id);
+                }
+            }
+            let _ = tx.send(stale_ids);
+        });
+
         Self {
             rows,
             selected: HashSet::new(),
             table_state,
             error_message: None,
             pending_delete: false,
+            stale_rx: Some(rx),
+        }
+    }
+
+    fn check_stale_results(&mut self) {
+        if let Some(ref rx) = self.stale_rx {
+            if let Ok(stale_ids) = rx.try_recv() {
+                for row in &mut self.rows {
+                    row.stale = Some(stale_ids.contains(&row.wt_id));
+                }
+                self.stale_rx = None;
+            }
         }
     }
 
@@ -121,7 +154,7 @@ impl CleanupScreen {
     }
 
     fn stale_count(&self) -> usize {
-        self.rows.iter().filter(|r| r.stale).count()
+        self.rows.iter().filter(|r| r.stale == Some(true)).count()
     }
 
     fn status_line(&self) -> Line<'_> {
@@ -215,6 +248,11 @@ impl CleanupScreen {
 }
 
 impl ScreenBehavior for CleanupScreen {
+    fn tick(&mut self, _manager: &mut Manager) -> ScreenAction {
+        self.check_stale_results();
+        ScreenAction::None
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, _manager: &Manager) {
         let error_height = if self.error_message.is_some() { 1 } else { 0 };
 
@@ -273,16 +311,16 @@ impl ScreenBehavior for CleanupScreen {
                     Span::styled("[ ]", Style::default().fg(theme::TEXT_DIM))
                 };
 
-                let branch_style = if row.stale {
+                let branch_style = if row.stale == Some(true) {
                     Style::default().fg(theme::YELLOW)
                 } else {
                     Style::default().fg(theme::TEXT)
                 };
 
-                let status_span = if row.stale {
-                    Span::styled("stale", Style::default().fg(theme::YELLOW))
-                } else {
-                    Span::styled("ok", Style::default().fg(theme::GREEN))
+                let status_span = match row.stale {
+                    None => Span::styled("checking…", Style::default().fg(theme::TEXT_DIM)),
+                    Some(true) => Span::styled("stale", Style::default().fg(theme::YELLOW)),
+                    Some(false) => Span::styled("ok", Style::default().fg(theme::GREEN)),
                 };
 
                 Row::new(vec![
@@ -303,7 +341,7 @@ impl ScreenBehavior for CleanupScreen {
             Constraint::Percentage(25),
             Constraint::Percentage(20),
             Constraint::Percentage(40),
-            Constraint::Length(6),
+            Constraint::Length(10),
         ];
 
         let table = Table::new(table_rows, widths)
@@ -321,6 +359,9 @@ impl ScreenBehavior for CleanupScreen {
     }
 
     fn handle_event(&mut self, event: &Event, _manager: &mut Manager) -> ScreenAction {
+        // Always check for background staleness results (even on non-key events)
+        self.check_stale_results();
+
         let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,

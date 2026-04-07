@@ -449,6 +449,7 @@ impl Manager {
     }
 
     /// Return worktrees whose branch is merged or whose remote branch is deleted.
+    #[allow(dead_code)]
     pub fn get_stale_worktrees(&self) -> Vec<Worktree> {
         let all_worktrees = db::get_worktrees(&self.conn);
         let mut stale = Vec::new();
