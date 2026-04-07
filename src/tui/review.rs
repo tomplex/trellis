@@ -23,6 +23,7 @@ pub struct ReviewScreen {
 }
 
 impl ReviewScreen {
+    #[allow(dead_code)]
     pub fn new(manager: &Manager) -> Self {
         let mut repos = manager.get_repos();
 

@@ -15,6 +15,7 @@ pub struct ActionMenuScreen {
 }
 
 impl ActionMenuScreen {
+    #[allow(dead_code)]
     pub fn new(title: String, items: Vec<(String, String, String)>) -> Self {
         let mut state = ListState::default();
         if !items.is_empty() {

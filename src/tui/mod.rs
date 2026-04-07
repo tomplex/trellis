@@ -20,12 +20,13 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Clear, Widget};
+use ratatui::widgets::{Block, Clear};
 
 use crate::manager::Manager;
 use crate::models::*;
 use crate::switch::{self, SwitchAction};
 
+#[allow(dead_code)]
 pub enum ActionResult {
     Confirmed(bool),
     MenuPick(Option<String>),
@@ -63,6 +64,7 @@ pub trait ScreenBehavior {
 }
 
 // All screen types
+#[allow(dead_code)]
 pub enum Screen {
     SessionList(session_list::SessionListScreen),
     ActionMenu(action_menu::ActionMenuScreen),

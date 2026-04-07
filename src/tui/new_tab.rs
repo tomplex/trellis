@@ -20,6 +20,7 @@ pub struct NewTabScreen {
 }
 
 impl NewTabScreen {
+    #[allow(dead_code)]
     pub fn new(_manager: &Manager, session_id: i64, session_name: String) -> Self {
         Self {
             session_id,
