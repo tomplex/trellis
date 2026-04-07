@@ -11,7 +11,7 @@ pub fn truncate_start(text: &str, max_len: usize) -> String {
     if char_count <= max_len {
         return text.to_string();
     }
-    let skip = char_count - (max_len - 2);
+    let skip = char_count - (max_len - 1);
     let truncated: String = text.chars().skip(skip).collect();
     format!("…{truncated}")
 }
@@ -42,6 +42,6 @@ mod tests {
 
     #[test]
     fn truncate_start_long() {
-        assert_eq!(truncate_start("/very/long/path/here", 12), "…/path/here");
+        assert_eq!(truncate_start("/very/long/path/here", 12), "…g/path/here");
     }
 }
