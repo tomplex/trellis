@@ -6,7 +6,7 @@
 
 **Architecture:** Screen-per-struct with stack navigation using ratatui. Each Python module maps 1:1 to a Rust module. The Rust binary reads the same SQLite database and writes the same switch file format as the Python version.
 
-**Tech Stack:** Rust, ratatui, crossterm, rusqlite (bundled), serde/serde_json, regex, md-5, dirs
+**Tech Stack:** Rust, ratatui, crossterm, rusqlite (bundled), serde/serde_json, regex, md-5, dirs, time
 
 **Spec:** `docs/superpowers/specs/2026-04-07-rust-tui-port-design.md`
 
@@ -77,6 +77,7 @@ serde_json = "1"
 dirs = "6"
 md-5 = "0.10"
 regex = "1"
+time = { version = "0.3", features = ["formatting", "macros"] }
 ```
 
 - [ ] **Step 2: Create models.rs**
@@ -363,29 +364,39 @@ pub fn cleanup() {
 mod tests {
     use super::*;
 
+    // Tests use unique temp files to avoid parallel test interference
+    fn test_switch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("torchard-test-switch-{}.json", name))
+    }
+
     #[test]
     fn roundtrip_session() {
+        let path = test_switch_path("session");
         let action = SwitchAction::Session {
             target: "my-session".to_string(),
         };
-        write_switch(&action);
-        let read = read_switch().unwrap();
+        let json = serde_json::to_string(&action).unwrap();
+        fs::write(&path, &json).unwrap();
+        let data = fs::read_to_string(&path).unwrap();
+        let read: SwitchAction = serde_json::from_str(&data).unwrap();
         match read {
             SwitchAction::Session { target } => assert_eq!(target, "my-session"),
             _ => panic!("expected Session"),
         }
-        cleanup();
-        assert!(read_switch().is_none());
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
     fn roundtrip_window() {
+        let path = test_switch_path("window");
         let action = SwitchAction::Window {
             session: "sess".to_string(),
             window: 3,
         };
-        write_switch(&action);
-        let read = read_switch().unwrap();
+        let json = serde_json::to_string(&action).unwrap();
+        fs::write(&path, &json).unwrap();
+        let data = fs::read_to_string(&path).unwrap();
+        let read: SwitchAction = serde_json::from_str(&data).unwrap();
         match read {
             SwitchAction::Window { session, window } => {
                 assert_eq!(session, "sess");
@@ -393,7 +404,30 @@ mod tests {
             }
             _ => panic!("expected Window"),
         }
-        cleanup();
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn json_format_matches_python() {
+        // Verify the JSON format matches what Python __main__.py expects:
+        // {"type": "session", "target": "..."} and {"type": "window", "session": "...", "window": N}
+        let session = serde_json::to_string(&SwitchAction::Session {
+            target: "test".into(),
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&session).unwrap();
+        assert_eq!(parsed["type"], "session");
+        assert_eq!(parsed["target"], "test");
+
+        let window = serde_json::to_string(&SwitchAction::Window {
+            session: "s".into(),
+            window: 2,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&window).unwrap();
+        assert_eq!(parsed["type"], "window");
+        assert_eq!(parsed["session"], "s");
+        assert_eq!(parsed["window"], 2);
     }
 }
 ```
@@ -625,7 +659,7 @@ pub fn get_session_by_name(conn: &Connection, name: &str) -> Option<Session> {
 }
 
 pub fn touch_session(conn: &Connection, session_id: i64) {
-    let now = chrono_now();
+    let now = utc_now_iso();
     conn.execute(
         "UPDATE sessions SET last_selected_at = ?1 WHERE id = ?2",
         params![now, session_id],
@@ -700,53 +734,11 @@ pub fn delete_worktree(conn: &Connection, worktree_id: i64) {
     .unwrap();
 }
 
-fn chrono_now() -> String {
-    // UTC ISO 8601 without external crate — use std::time
-    use std::time::SystemTime;
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
-    // Format as simplified ISO 8601 — matches Python's datetime.now(timezone.utc).isoformat()
-    // We'll use a basic approach; exact formatting matches Python's output enough for sorting
-    let secs = duration.as_secs();
-    let days = secs / 86400;
-    let remaining = secs % 86400;
-    let hours = remaining / 3600;
-    let minutes = (remaining % 3600) / 60;
-    let seconds = remaining % 60;
-
-    // Days since 1970-01-01
-    let mut y = 1970i64;
-    let mut d = days as i64;
-    loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if d < days_in_year {
-            break;
-        }
-        d -= days_in_year;
-        y += 1;
-    }
-    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut m = 0;
-    for (i, &md) in month_days.iter().enumerate() {
-        if d < md as i64 {
-            m = i + 1;
-            break;
-        }
-        d -= md as i64;
-    }
-    let day = d + 1;
-
-    format!(
-        "{y:04}-{m:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}+00:00",
-        y = y,
-        m = m,
-        day = day,
-        hours = hours,
-        minutes = minutes,
-        seconds = seconds
-    )
+fn utc_now_iso() -> String {
+    // Matches Python's datetime.now(timezone.utc).isoformat()
+    use time::OffsetDateTime;
+    let now = OffsetDateTime::now_utc();
+    now.format(&time::format_description::well_known::Rfc3339).unwrap()
 }
 
 #[cfg(test)]
@@ -914,7 +906,11 @@ mod tests {
 
     #[test]
     fn init_db_creates_schema() {
-        let tmp = std::env::temp_dir().join("torchard-test-init.db");
+        // Use unique path to avoid parallel test interference
+        let tmp = std::env::temp_dir().join(format!(
+            "torchard-test-init-{}.db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&tmp);
         let conn = init_db(&tmp);
         // Verify tables exist
@@ -1316,10 +1312,8 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, GitError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let branches: Vec<&str> = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .lines()
-        .collect();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let branches: Vec<&str> = stdout.trim().lines().collect();
     for candidate in &["main", "master"] {
         if branches.contains(candidate) {
             return Ok(candidate.to_string());
@@ -1488,10 +1482,8 @@ pub fn is_branch_merged(repo_path: &str, branch: &str, into: &str) -> Result<boo
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let merged: Vec<&str> = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .lines()
-        .collect();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let merged: Vec<&str> = stdout.trim().lines().collect();
     Ok(merged.contains(&branch))
 }
 
@@ -1558,9 +1550,18 @@ pub fn get_first_user_message(session_id: &str) -> Option<String> {
     if !projects_dir.exists() {
         return None;
     }
-    for entry in fs::read_dir(&projects_dir).ok()? {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_dir() {
+    let entries = match fs::read_dir(&projects_dir) {
+        Ok(e) => e,
+        Err(_) => return None,
+    };
+    for entry in entries {
+        // Skip unreadable entries (matches Python's behavior of iterating past errors)
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        if !is_dir {
             continue;
         }
         let jsonl = entry.path().join(format!("{}.jsonl", session_id));
@@ -1574,13 +1575,27 @@ pub fn get_first_user_message(session_id: &str) -> Option<String> {
 fn first_user_message_from_jsonl(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     for line in content.lines() {
-        let entry: serde_json::Value = serde_json::from_str(line).ok()?;
-        if entry.get("type")?.as_str()? == "user" {
-            let content = entry.get("message")?.get("content")?.as_str()?;
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+        // Skip lines that fail to parse (matches Python's try/except JSONDecodeError: continue)
+        let entry: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let is_user = entry
+            .get("type")
+            .and_then(|v| v.as_str())
+            .map(|t| t == "user")
+            .unwrap_or(false);
+        if !is_user {
+            continue;
+        }
+        let text = entry
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     None
@@ -1624,15 +1639,21 @@ pub fn classify_pane(pane_text: &str) -> &'static str {
     }
     let tail_text: String = tail.join("\n");
 
+    // Use LazyLock to avoid recompiling regexes on every call (this is a hot path —
+    // called for every expanded window row on every render cycle)
+    use std::sync::LazyLock;
+    static PROMPTING_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"❯\s+1\.").unwrap());
+    static WORKING_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"[^\x00-\x7f]\s+\S+…").unwrap());
+
     // Permission dialog: ❯ followed by numbered choice + "Esc to cancel"
-    let prompting_re = Regex::new(r"❯\s+1\.").unwrap();
-    if prompting_re.is_match(&tail_text) && tail_text.contains("Esc to cancel") {
+    if PROMPTING_RE.is_match(&tail_text) && tail_text.contains("Esc to cancel") {
         return "prompting";
     }
 
     // Active spinner: non-ASCII char followed by word ending in …
-    let working_re = Regex::new(r"[^\x00-\x7f]\s+\S+…").unwrap();
-    if working_re.is_match(&tail_text) {
+    if WORKING_RE.is_match(&tail_text) {
         return "working";
     }
 
@@ -1920,18 +1941,42 @@ Port of `torchard/core/manager.py`. The Manager ties DB, tmux, and git together.
 
 - [ ] **Step 1: Write manager.rs**
 
-This is a large file — port every method from the Python Manager class plus the standalone `detect_subsystems` and `apply_layout` functions. Reference `torchard/core/manager.py` for the exact logic of each method.
+This is a large file (~350-400 lines) — port every method from the Python Manager class plus the standalone `detect_subsystems` and `apply_layout` functions. Reference `torchard/core/manager.py` for the exact logic of each method.
 
-Key points:
-- `Manager` holds `rusqlite::Connection`
-- `repos_dir()` / `worktrees_dir()` read from config, with same defaults as Python
-- `create_session()` handles both default-branch (in-place) and feature-branch (worktree) cases
-- `list_sessions()` merges DB sessions with `tmux::list_sessions()` output
-- `scan_existing()` has 3 sub-scans: repos, worktrees, tmux sessions
-- `apply_layout()` creates tmux session + "claude"/"shell" windows
-- `detect_subsystems()` checks `workers/`, `src/`, `libs/`, `pods/` for subdirectories
+**Struct and properties:**
 
-The file will be ~350-400 lines. Port method-by-method from the Python source.
+```rust
+pub struct Manager {
+    pub conn: Connection,
+}
+
+impl Manager {
+    pub fn new(conn: Connection) -> Self { Self { conn } }
+    pub fn repos_dir(&self) -> PathBuf { /* read "repos_dir" from config, default ~/dev */ }
+    pub fn worktrees_dir(&self) -> PathBuf { /* read "worktrees_dir" from config, default ~/dev/worktrees */ }
+    fn worktree_path(&self, repo_name: &str, branch: &str) -> String { /* worktrees_dir / repo_name / branch.replace("/", "-") */ }
+}
+```
+
+**Method-by-method detail (all return `Result` where the Python version can raise):**
+
+- `create_session(repo_path, base_branch, session_name, subdirectory: Option)` — if base_branch == repo's default_branch, start in repo root; otherwise `git::fetch_and_pull` then `git::create_worktree` (catch error if dir already exists). Call `db::add_session`, then `apply_layout(session_name, effective_dir)` where effective_dir = start_dir + optional subdirectory. If a worktree was created, `db::add_worktree`.
+- `adopt_session(session_name, repo_path, base_branch)` — `_get_or_create_repo`, then `db::add_session`. No tmux/git operations.
+- `rename_session(session_id, new_name)` — lookup session, `tmux::rename_session` (ignore error if not live), UPDATE name in DB.
+- `set_base_branch(session_id, base_branch)` — UPDATE base_branch in DB.
+- `checkout_and_review(repo_path, pr_or_branch)` — if numeric, resolve via `git::get_pr_branch`. `git::fetch_branch`. Check for existing session by name AND existing worktree on disk — reuse if found. Otherwise create worktree, session, apply layout, add worktree to DB. Returns `(Session, worktree_path)`.
+- `add_tab(session_id, branch_name)` — lookup session + repo, `git::create_worktree`, `tmux::new_window(session_name, branch_name, Some(worktree_path))`, `db::add_worktree`.
+- `delete_session(session_id, cleanup_worktrees: bool)` — **two code paths**: if `cleanup_worktrees`, iterate worktrees and `git::remove_worktree` + `db::delete_worktree` each. If NOT cleanup_worktrees, UPDATE worktrees SET session_id = NULL WHERE session_id = ? (detach to satisfy FK constraint). Then `tmux::kill_session` (ignore error), `db::delete_session`.
+- `cleanup_worktree(worktree_id)` — lookup worktree + repo, `git::remove_worktree`, `db::delete_worktree`.
+- `get_stale_worktrees()` — for each worktree, check `git::is_branch_merged` and `git::has_remote_branch`. Return worktrees where merged OR no remote branch. Catch errors and skip (don't mark as stale on error).
+- `list_sessions()` — get all DB sessions + `tmux::list_sessions()`. Build `HashMap<String, TmuxSession>` by name. For each DB session, create `SessionInfo` with live data if tmux session exists. Then append unmanaged tmux sessions (those not in DB) as `SessionInfo { managed: false, ... }`.
+- `scan_existing()` — 3 sub-methods: `_scan_repos` (iterate repos_dir, skip worktrees_dir and dotfiles, add to DB), `_scan_worktrees` (iterate worktrees_dir/<repo>/<branch>, match to repos, add to DB), `_scan_tmux_sessions` (iterate live tmux sessions, match to known repos by name prefix, add to DB).
+- Convenience wrappers: `get_repos()`, `get_sessions()`, `get_worktrees_for_session()`, `touch_session()`, `get_session_by_name()` — delegate to `db::` functions.
+
+**Standalone functions:**
+
+- `apply_layout(session_name, working_dir)` — `tmux::new_session`, rename window 1 to "claude", `tmux::new_window(session_name, "shell", Some(working_dir))`, `tmux::send_keys(session_name:claude, &["claude", "Enter"])`, `tmux::select_window(session_name, 1)`. Matches `DEFAULT_LAYOUT` in Python.
+- `detect_subsystems(repo_path) -> Vec<String>` — check `workers/`, `src/`, `libs/`, `pods/` for non-hidden subdirectories. Return as `"parent/child"` strings, sorted.
 
 - [ ] **Step 2: Wire up and verify compilation**
 
@@ -2174,10 +2219,11 @@ impl App {
             if is_top {
                 screen.behavior().render(f, area, &self.manager);
             } else if i + 1 < self.screen_stack.len() && self.screen_stack[i + 1].behavior().is_modal() {
-                // Render parent of a modal (dimmed)
+                // Render parent of a modal, then overlay a dark background.
+                // ratatui doesn't support alpha blending, so this is a solid dark overlay
+                // rather than a true dim. This is acceptable — the modal draws on top anyway.
                 screen.behavior().render(f, area, &self.manager);
-                // Dim overlay
-                let dim = Block::default().style(Style::default().bg(Color::Rgb(0, 0, 0)));
+                let dim = Block::default().style(Style::default().bg(Color::Rgb(0x0d, 0x0d, 0x1a)));
                 f.render_widget(dim, area);
             }
         }
@@ -2558,9 +2604,10 @@ Key behaviors:
 - 4-column table: Date, Project (truncated, `~/` prefix), Branch (truncated), Summary (truncated)
 - Scoping: `scope_paths` and `scope_label`, toggle with `t`
 - Sorting: 4 modes (date/project/branch/summary) toggled by `d`/`p`/`b`/`s`. Same key toggles direction. Date defaults descending, others ascending.
-- Filtering: substring match (not fuzzy) against all 4 fields
-- Resume (enter): resolve session ID, find matching managed session, create tmux window with `claude --resume <uuid>`, write switch, exit app
+- Filtering: The Python HistoryScreen uses an Input widget with `on_input_changed` — same pattern as SessionList's filter. Use `filter_active: bool` + `filter: String` state. The filter input should be togglable (e.g. `/` to activate, escape to dismiss) or always visible — check Python behavior: in the Python code the filter input exists but has class "hidden" by default, so it's present but not shown initially. For the Rust port, use the same `filter_active` toggle pattern. Filtering is substring match (not fuzzy) against all 4 fields.
+- Resume (enter): resolve session ID, find matching managed session (check repo paths AND worktree paths), create tmux window with `claude --resume <uuid>`, write switch, exit app. If no matching session found, create a new tmux session.
 - Title bar shows scope, count, current sort + direction
+- Keybindings: escape (back/dismiss filter), j/k (navigate), t (toggle scope), d/p/b/s (sort), / (activate filter), enter (resume)
 
 - [ ] **Step 2: Manual test**
 
@@ -2613,7 +2660,14 @@ git commit -m "add CleanupScreen with background staleness check"
 Run: `cd torchard-rs && cargo test`
 Expected: All unit tests pass.
 
-- [ ] **Step 2: Side-by-side manual testing**
+- [ ] **Step 2: Cross-language switch file interop test**
+
+Verify that the Rust binary writes switch JSON that the Python `__main__.py` can read, and vice versa:
+
+1. Run `torchard-rs`, select a session, verify the Python `__main__.py` switch-reading logic would parse the file correctly: `python3 -c "import json, tempfile; from pathlib import Path; p = Path(tempfile.gettempdir()) / 'torchard-switch.json'; print(json.loads(p.read_text()))"`
+2. Verify both write to the same temp directory path (`tempfile.gettempdir()` in Python vs `std::env::temp_dir()` in Rust)
+
+- [ ] **Step 3: Side-by-side manual testing**
 
 Test every interaction against the Python version:
 - Session list renders identically (colors, indicators, sort order)
@@ -2628,7 +2682,7 @@ Test every interaction against the Python version:
 - Settings save correctly
 - Help screen shows correct content
 
-- [ ] **Step 3: Build release binary and test startup time**
+- [ ] **Step 4: Build release binary and test startup time**
 
 Run: `cd torchard-rs && cargo build --release`
 
@@ -2636,7 +2690,7 @@ Compare: `time torchard` vs `time ./target/release/torchard-rs`
 
 Expected: Rust binary starts in <50ms vs Python's 200-500ms.
 
-- [ ] **Step 4: Final commit**
+- [ ] **Step 5: Final commit**
 
 ```bash
 git add torchard-rs/
