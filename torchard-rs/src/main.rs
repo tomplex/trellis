@@ -4,6 +4,7 @@ mod conversation_index;
 mod db;
 mod fuzzy;
 mod git;
+mod manager;
 mod models;
 mod switch;
 mod tmux;
