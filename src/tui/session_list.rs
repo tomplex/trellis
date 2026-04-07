@@ -147,13 +147,6 @@ enum InlineMode {
     ActionMenu { items: Vec<(String, String)>, cursor: usize },
 }
 
-/// Tracks which action we're waiting for a child screen result.
-#[derive(Debug, Clone)]
-enum PendingAction {
-    None,
-    ActionMenu,
-}
-
 pub struct SessionListScreen {
     sessions: Vec<SessionInfo>,
     repos: HashMap<i64, Repo>,
@@ -163,7 +156,6 @@ pub struct SessionListScreen {
     cursor: usize,
     rows: Vec<RowData>,
     table_state: TableState,
-    pending_action: PendingAction,
     inline_mode: InlineMode,
     status_message: Option<String>,
 }
@@ -179,7 +171,6 @@ impl SessionListScreen {
             cursor: 0,
             rows: Vec::new(),
             table_state: TableState::default(),
-            pending_action: PendingAction::None,
             inline_mode: InlineMode::None,
             status_message: None,
         };
@@ -836,28 +827,10 @@ impl SessionListScreen {
             None => return ScreenAction::None,
         };
 
-        // Tab-level actions
+        // Tab-level actions — no items remain after removing rename-tab
         if key.starts_with("win:") {
-            let parts: Vec<&str> = key.splitn(3, ':').collect();
-            if parts.len() == 3 {
-                let session_name = parts[1];
-                let window_index: i64 = parts[2].parse().unwrap_or(0);
-                let windows = tmux::list_windows(session_name);
-                let mut items = Vec::new();
-                if let Some(win) = windows.iter().find(|w| w.index == window_index) {
-                    items.push((
-                        "rename-tab".to_string(),
-                        "Rename tab".to_string(),
-                        win.name.clone(),
-                    ));
-                }
-                self.pending_action = PendingAction::ActionMenu;
-                let menu = super::action_menu::ActionMenuScreen::new(
-                    "Tab actions".to_string(),
-                    items,
-                );
-                return ScreenAction::Push(Screen::ActionMenu(menu));
-            }
+            self.status_message = Some("No actions available for tabs.".to_string());
+            return ScreenAction::None;
         }
 
         let session = match self.current_session() {
@@ -865,31 +838,27 @@ impl SessionListScreen {
             None => return ScreenAction::None,
         };
 
-        let mut items = Vec::new();
+        let mut items: Vec<(String, String)> = Vec::new();
         if session.managed {
-            items.push(("rename".to_string(), "Rename".to_string(), session.name.clone()));
-            items.push((
-                "branch".to_string(),
-                "Change branch".to_string(),
-                session.base_branch.clone().unwrap_or_default(),
-            ));
+            // "rename" removed — use `r` directly
+            items.push(("branch".to_string(), "Change branch".to_string()));
             if session.live {
-                items.push(("claude".to_string(), "Launch claude".to_string(), String::new()));
+                items.push(("claude".to_string(), "Launch claude".to_string()));
             }
         } else if session.live {
-            items.push((
-                "adopt".to_string(),
-                "Adopt session".to_string(),
-                "bring under trellis management".to_string(),
-            ));
+            items.push(("adopt".to_string(), "Adopt session".to_string()));
         }
 
-        self.pending_action = PendingAction::ActionMenu;
-        let menu = super::action_menu::ActionMenuScreen::new(
-            format!("Actions \u{2014} {}", session.name),
+        if items.is_empty() {
+            self.status_message = Some("No actions available.".to_string());
+            return ScreenAction::None;
+        }
+
+        self.inline_mode = InlineMode::ActionMenu {
             items,
-        );
-        ScreenAction::Push(Screen::ActionMenu(menu))
+            cursor: 0,
+        };
+        ScreenAction::None
     }
 
     fn action_history(&self, manager: &Manager) -> ScreenAction {
@@ -1237,6 +1206,43 @@ impl SessionListScreen {
             }
         }
     }
+
+    fn handle_action_menu_key(&mut self, code: KeyCode, manager: &Manager) -> ScreenAction {
+        let (items, menu_cursor) = match &mut self.inline_mode {
+            InlineMode::ActionMenu { items, cursor } => (items.clone(), cursor),
+            _ => return ScreenAction::None,
+        };
+
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let InlineMode::ActionMenu { cursor, items } = &mut self.inline_mode {
+                    if *cursor + 1 < items.len() {
+                        *cursor += 1;
+                    }
+                }
+                ScreenAction::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let InlineMode::ActionMenu { cursor, .. } = &mut self.inline_mode {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                ScreenAction::None
+            }
+            KeyCode::Enter => {
+                let selected_key = items.get(*menu_cursor).map(|(k, _)| k.clone());
+                self.inline_mode = InlineMode::None;
+                if let Some(key) = selected_key {
+                    return self.handle_action_picked(Some(key), manager);
+                }
+                ScreenAction::None
+            }
+            KeyCode::Esc => {
+                self.inline_mode = InlineMode::None;
+                ScreenAction::None
+            }
+            _ => ScreenAction::None,
+        }
+    }
 }
 
 impl ScreenBehavior for SessionListScreen {
@@ -1390,7 +1396,61 @@ impl ScreenBehavior for SessionListScreen {
                 let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG));
                 f.render_widget(status, chunks[2]);
             }
-            _ => {} // Other modes rendered in later tasks
+            InlineMode::ActionMenu { ref items, cursor: menu_cursor } => {
+                // Draw hint in status line
+                let hint = Paragraph::new("[j/k] navigate  [enter] select  [esc] cancel")
+                    .style(Style::default().fg(theme::TEXT_DIM).bg(theme::BG));
+                f.render_widget(hint, chunks[2]);
+
+                // Calculate dropdown position anchored to cursor row
+                let table_area = chunks[1];
+                let selected = self.table_state.selected().unwrap_or(0);
+                let scroll_offset = self.table_state.offset();
+                let visible_row = selected - scroll_offset;
+                let anchor_y = table_area.y + 1 + visible_row as u16;
+
+                let menu_height = items.len().min(8) as u16 + 2; // +2 for border
+                let menu_width = items.iter().map(|(_, label)| label.len()).max().unwrap_or(10) as u16 + 6; // padding + border
+
+                // Position: below if room, above if not
+                let menu_y = if anchor_y + 1 + menu_height <= table_area.y + table_area.height {
+                    anchor_y + 1
+                } else {
+                    anchor_y.saturating_sub(menu_height)
+                };
+
+                let menu_area = Rect::new(
+                    table_area.x + 2,
+                    menu_y,
+                    menu_width.min(table_area.width.saturating_sub(4)),
+                    menu_height.min(table_area.height),
+                );
+
+                // Clear area and draw menu
+                f.render_widget(ratatui::widgets::Clear, menu_area);
+
+                let menu_items: Vec<Line> = items.iter().enumerate().map(|(i, (_, label))| {
+                    if i == *menu_cursor {
+                        Line::from(Span::styled(
+                            format!(" {} ", label),
+                            Style::default().fg(Color::White).bg(theme::CURSOR_BG),
+                        ))
+                    } else {
+                        Line::from(Span::styled(
+                            format!(" {} ", label),
+                            Style::default().fg(theme::TEXT),
+                        ))
+                    }
+                }).collect();
+
+                let menu_block = Block::default()
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(Style::default().fg(theme::ACCENT))
+                    .style(Style::default().bg(theme::HEADER_BG));
+
+                let menu_widget = Paragraph::new(menu_items).block(menu_block);
+                f.render_widget(menu_widget, menu_area);
+            }
         }
 
         // Footer
@@ -1436,7 +1496,7 @@ impl ScreenBehavior for SessionListScreen {
             InlineMode::Rename { .. } => return self.handle_rename_key(*code, *modifiers, manager),
             InlineMode::Review { .. } => return self.handle_review_key(*code, *modifiers, manager),
             InlineMode::NewTab { .. } => return self.handle_new_tab_key(*code, *modifiers, manager),
-            _ => return ScreenAction::None,
+            InlineMode::ActionMenu { .. } => return self.handle_action_menu_key(*code, manager),
         }
 
         // If filter is active, handle filter-specific keys
@@ -1496,16 +1556,7 @@ impl ScreenBehavior for SessionListScreen {
         }
     }
 
-    fn on_child_result(&mut self, result: ActionResult, manager: &mut Manager) -> ScreenAction {
-        let pending = std::mem::replace(&mut self.pending_action, PendingAction::None);
-        match pending {
-            PendingAction::ActionMenu => {
-                if let ActionResult::MenuPick(key) = result {
-                    return self.handle_action_picked(key, manager);
-                }
-            }
-            PendingAction::None => {}
-        }
+    fn on_child_result(&mut self, _result: ActionResult, _manager: &mut Manager) -> ScreenAction {
         ScreenAction::None
     }
 
