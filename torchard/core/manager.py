@@ -354,91 +354,81 @@ class Manager:
                 stale.append(wt)
         return stale
 
-    def scan_existing(self) -> None:
-        """First-run adoption: scan repos and worktrees dirs, scan live tmux sessions,
-        and populate the DB with discovered state."""
-        home_dev = self.repos_dir
-        worktrees_root = self.worktrees_dir
+    def _scan_repos(self, home_dev: Path, known_repos: dict[str, Repo]) -> None:
+        """Discover git repos in the repos directory."""
+        if not home_dev.is_dir():
+            return
+        for entry in home_dev.iterdir():
+            if not entry.is_dir() or entry.name == "worktrees":
+                continue
+            if (entry / ".git").exists() and str(entry) not in known_repos:
+                try:
+                    default_branch = git.detect_default_branch(str(entry))
+                except git.GitError:
+                    default_branch = "main"
+                repo = add_repo(
+                    self._conn,
+                    Repo(path=str(entry), name=entry.name, default_branch=default_branch),
+                )
+                known_repos[str(entry)] = repo
 
-        # Build a path -> Repo map from already-known repos
-        known_repos: dict[str, Repo] = {r.path: r for r in get_repos(self._conn)}
-        known_worktree_paths = {wt.path for wt in get_worktrees(self._conn)}
-
-        # 1. Scan ~/dev/ for git repos (direct children that are git repos)
-        if home_dev.is_dir():
-            for entry in home_dev.iterdir():
-                if not entry.is_dir() or entry.name == "worktrees":
+    def _scan_worktrees(
+        self, home_dev: Path, worktrees_root: Path, known_repos: dict[str, Repo], known_worktree_paths: set[str],
+    ) -> None:
+        """Discover worktrees under the worktrees directory and register them."""
+        if not worktrees_root.is_dir():
+            return
+        for repo_dir in worktrees_root.iterdir():
+            if not repo_dir.is_dir():
+                continue
+            for branch_dir in repo_dir.iterdir():
+                if not branch_dir.is_dir():
                     continue
-                if (entry / ".git").exists() and str(entry) not in known_repos:
-                    try:
-                        default_branch = git.detect_default_branch(str(entry))
-                    except git.GitError:
-                        default_branch = "main"
-                    repo = add_repo(
-                        self._conn,
-                        Repo(path=str(entry), name=entry.name, default_branch=default_branch),
-                    )
-                    known_repos[str(entry)] = repo
-
-        # 2. Scan ~/dev/worktrees/<repo>/<branch>/ and adopt worktrees
-        if worktrees_root.is_dir():
-            for repo_dir in worktrees_root.iterdir():
-                if not repo_dir.is_dir():
+                if str(branch_dir) in known_worktree_paths:
                     continue
-                for branch_dir in repo_dir.iterdir():
-                    if not branch_dir.is_dir():
+                repo_path_candidate = str(home_dev / repo_dir.name)
+                if repo_path_candidate not in known_repos:
+                    if Path(repo_path_candidate).is_dir():
+                        try:
+                            default_branch = git.detect_default_branch(repo_path_candidate)
+                        except git.GitError:
+                            default_branch = "main"
+                        repo = add_repo(
+                            self._conn,
+                            Repo(
+                                path=repo_path_candidate,
+                                name=repo_dir.name,
+                                default_branch=default_branch,
+                            ),
+                        )
+                        known_repos[repo_path_candidate] = repo
+                    else:
                         continue
-                    if str(branch_dir) in known_worktree_paths:
-                        continue
-                    # Find or create the repo record (look in ~/dev/<repo_name>)
-                    repo_path_candidate = str(home_dev / repo_dir.name)
-                    if repo_path_candidate not in known_repos:
-                        # Try to detect from actual path
-                        if Path(repo_path_candidate).is_dir():
-                            try:
-                                default_branch = git.detect_default_branch(repo_path_candidate)
-                            except git.GitError:
-                                default_branch = "main"
-                            repo = add_repo(
-                                self._conn,
-                                Repo(
-                                    path=repo_path_candidate,
-                                    name=repo_dir.name,
-                                    default_branch=default_branch,
-                                ),
-                            )
-                            known_repos[repo_path_candidate] = repo
-                        else:
-                            continue  # Can't resolve repo, skip
-                    repo = known_repos[repo_path_candidate]
-                    add_worktree(
-                        self._conn,
-                        Worktree(
-                            repo_id=repo.id,
-                            path=str(branch_dir),
-                            branch=branch_dir.name,
-                            created_at=_now(),
-                        ),
-                    )
-                    known_worktree_paths.add(str(branch_dir))
+                repo = known_repos[repo_path_candidate]
+                add_worktree(
+                    self._conn,
+                    Worktree(
+                        repo_id=repo.id,
+                        path=str(branch_dir),
+                        branch=branch_dir.name,
+                        created_at=_now(),
+                    ),
+                )
+                known_worktree_paths.add(str(branch_dir))
 
-        # 3. Scan live tmux sessions; match to repos by cwd
+    def _scan_tmux_sessions(self, known_repos: dict[str, Repo]) -> None:
+        """Match live tmux sessions to known repos and register them."""
         known_session_names = {s.name for s in get_sessions(self._conn)}
-        live_sessions = tmux.list_sessions()
-        for ts in live_sessions:
+        for ts in tmux.list_sessions():
             if ts["name"] in known_session_names:
                 continue
-            # Try to figure out which repo this session belongs to by matching
-            # the session name to a known repo name (best-effort heuristic)
             matched_repo: Repo | None = None
             for repo in known_repos.values():
                 if ts["name"].startswith(repo.name):
                     matched_repo = repo
                     break
-
             if matched_repo is None:
                 continue
-
             add_session(
                 self._conn,
                 Session(
@@ -449,6 +439,18 @@ class Manager:
                 ),
             )
             known_session_names.add(ts["name"])
+
+    def scan_existing(self) -> None:
+        """First-run adoption: scan repos and worktrees dirs, scan live tmux sessions,
+        and populate the DB with discovered state."""
+        home_dev = self.repos_dir
+        worktrees_root = self.worktrees_dir
+        known_repos: dict[str, Repo] = {r.path: r for r in get_repos(self._conn)}
+        known_worktree_paths = {wt.path for wt in get_worktrees(self._conn)}
+
+        self._scan_repos(home_dev, known_repos)
+        self._scan_worktrees(home_dev, worktrees_root, known_repos, known_worktree_paths)
+        self._scan_tmux_sessions(known_repos)
 
     def list_sessions(self) -> list[dict]:
         """Return DB sessions enriched with live tmux state, plus unmanaged live sessions."""
