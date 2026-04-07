@@ -802,7 +802,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "torchard-rs"
+name = "torchard"
 version = "0.1.0"
 dependencies = [
  "crossterm",
