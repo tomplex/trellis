@@ -153,9 +153,6 @@ enum PendingAction {
     None,
     NewPicker,
     ActionMenu,
-    ConfirmDeleteTab { session_name: String, window_index: i64 },
-    ConfirmDeleteSession { session_id: i64 },
-    ConfirmKillSession { session_name: String },
 }
 
 pub struct SessionListScreen {
@@ -747,15 +744,11 @@ impl SessionListScreen {
             if parts.len() == 3 {
                 let session_name = parts[1].to_string();
                 let window_index: i64 = parts[2].parse().unwrap_or(0);
-                self.pending_action = PendingAction::ConfirmDeleteTab {
-                    session_name: session_name.clone(),
-                    window_index,
+                self.inline_mode = InlineMode::Confirm {
+                    message: format!("Kill tab {} in '{}'? [y] Yes  [n] No", window_index, session_name),
+                    action: ConfirmAction::KillTab { session_name, window_index },
                 };
-                let confirm = super::confirm::ConfirmScreen::new(
-                    format!("Kill tab {} in '{}'?", window_index, session_name),
-                    "This will close the window and any processes in it.".to_string(),
-                );
-                return ScreenAction::Push(Screen::Confirm(confirm));
+                return ScreenAction::None;
             }
         }
 
@@ -770,27 +763,22 @@ impl SessionListScreen {
         };
 
         if session.managed {
-            let mut msg = "Remove from trellis.".to_string();
-            if session.live {
-                msg.push_str(" The tmux session will also be killed.");
-            }
-            self.pending_action = PendingAction::ConfirmDeleteSession {
-                session_id: session.id.unwrap(),
+            let msg = if session.live {
+                format!("Delete session '{}' (tmux session will be killed)? [y] Yes  [n] No", session.name)
+            } else {
+                format!("Delete session '{}'? [y] Yes  [n] No", session.name)
             };
-            let confirm = super::confirm::ConfirmScreen::new(
-                format!("Delete session '{}'?", session.name),
-                msg,
-            );
-            ScreenAction::Push(Screen::Confirm(confirm))
+            self.inline_mode = InlineMode::Confirm {
+                message: msg,
+                action: ConfirmAction::DeleteSession { session_id: session.id.unwrap() },
+            };
+            ScreenAction::None
         } else {
-            self.pending_action = PendingAction::ConfirmKillSession {
-                session_name: session.name.clone(),
+            self.inline_mode = InlineMode::Confirm {
+                message: format!("Kill tmux session '{}'? [y] Yes  [n] No", session.name),
+                action: ConfirmAction::KillSession { session_name: session.name.clone() },
             };
-            let confirm = super::confirm::ConfirmScreen::new(
-                format!("Kill tmux session '{}'?", session.name),
-                "This will close all windows in the session.".to_string(),
-            );
-            ScreenAction::Push(Screen::Confirm(confirm))
+            ScreenAction::None
         }
     }
 
@@ -1044,11 +1032,27 @@ impl SessionListScreen {
             .style(theme::style_footer())
     }
 
-    fn handle_confirm_key(&mut self, code: KeyCode, _manager: &mut Manager) -> ScreenAction {
+    fn handle_confirm_key(&mut self, code: KeyCode, manager: &mut Manager) -> ScreenAction {
+        let action = match &self.inline_mode {
+            InlineMode::Confirm { action, .. } => action.clone(),
+            _ => return ScreenAction::None,
+        };
+
         match code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                // Will be implemented in Task 2
+                match action {
+                    ConfirmAction::DeleteSession { session_id } => {
+                        let _ = manager.delete_session(session_id, false);
+                    }
+                    ConfirmAction::KillTab { session_name, window_index } => {
+                        let _ = tmux::kill_window(&session_name, window_index);
+                    }
+                    ConfirmAction::KillSession { session_name } => {
+                        let _ = tmux::kill_session(&session_name);
+                    }
+                }
                 self.inline_mode = InlineMode::None;
+                self.refresh(manager);
                 ScreenAction::None
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -1247,24 +1251,6 @@ impl ScreenBehavior for SessionListScreen {
             PendingAction::ActionMenu => {
                 if let ActionResult::MenuPick(key) = result {
                     return self.handle_action_picked(key, manager);
-                }
-            }
-            PendingAction::ConfirmDeleteTab { session_name, window_index } => {
-                if let ActionResult::Confirmed(true) = result {
-                    let _ = tmux::kill_window(&session_name, window_index);
-                    self.refresh(manager);
-                }
-            }
-            PendingAction::ConfirmDeleteSession { session_id } => {
-                if let ActionResult::Confirmed(true) = result {
-                    let _ = manager.delete_session(session_id, false);
-                    self.refresh(manager);
-                }
-            }
-            PendingAction::ConfirmKillSession { session_name } => {
-                if let ActionResult::Confirmed(true) = result {
-                    let _ = tmux::kill_session(&session_name);
-                    self.refresh(manager);
                 }
             }
             PendingAction::None => {}
