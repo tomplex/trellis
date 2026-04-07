@@ -427,7 +427,7 @@ class NewSessionScreen(Screen):
                 session_name=session_name,
                 subdirectory=self._selected_subdirectory,
             )
-        except Exception as exc:
+        except (GitError, tmux.TmuxError) as exc:
             self._set_error(f"Error: {exc}")
             return
 

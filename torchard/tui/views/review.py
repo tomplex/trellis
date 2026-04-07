@@ -8,6 +8,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Input, Static
 
+from torchard.core import git, tmux
 from torchard.core.manager import Manager
 
 
@@ -61,7 +62,7 @@ class ReviewScreen(Screen):
             session, worktree_path = self._manager.checkout_and_review(
                 self._repo_path, pr_or_branch,
             )
-        except Exception as exc:
+        except (git.GitError, tmux.TmuxError) as exc:
             self.app.call_from_thread(
                 self.query_one("#review-error", Static).update,
                 f"[red]{exc}[/red]",
@@ -69,7 +70,6 @@ class ReviewScreen(Screen):
             return
 
         # Launch claude in the first window
-        from torchard.core import tmux
         tmux.send_keys(f"{session.name}:claude", "claude", "Enter")
 
         # Write switch file and exit

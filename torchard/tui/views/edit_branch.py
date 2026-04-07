@@ -156,7 +156,7 @@ class EditBranchScreen(Screen):
     def _apply(self, branch: str) -> None:
         try:
             self._manager.set_base_branch(self._session_id, branch)
-        except Exception as exc:
+        except ValueError as exc:
             self.query_one("#editbranch-error", Static).update(f"[red]{exc}[/red]")
             return
         self.app.pop_screen()

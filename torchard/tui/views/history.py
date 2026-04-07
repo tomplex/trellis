@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Input, Static
 
+from torchard.core import tmux
 from torchard.core.db import get_repos, get_sessions
-from torchard.core.history import Conversation, filter_by_paths, parse_index
+from torchard.core.conversation_index import Conversation, filter_by_paths, parse_index
 from torchard.core.manager import Manager
 from torchard.tui.switch import write_switch
 from torchard.tui.utils import truncate_end
@@ -97,7 +98,7 @@ class HistoryScreen(Screen):
 
         for i, entry in enumerate(entries):
             # Shorten project path
-            proj = entry.project.replace("/Users/tom/", "~/")
+            proj = entry.project.replace(str(Path.home()) + "/", "~/")
             table.add_row(
                 entry.date,
                 truncate_end(proj, 40),
@@ -188,29 +189,21 @@ class HistoryScreen(Screen):
 
         if target_session:
             # Open in existing session
-            subprocess.run([
-                "tmux", "new-window", "-t", target_session,
-                "-n", f"resume-{session_id[:8]}",
-                "-c", entry.project,
-            ])
-            subprocess.run([
-                "tmux", "send-keys", "-t",
-                f"{target_session}:resume-{session_id[:8]}",
-                resume_cmd, "Enter",
-            ])
+            try:
+                window_name = f"resume-{session_id[:8]}"
+                tmux.new_window(target_session, window_name, entry.project)
+                tmux.send_keys(f"{target_session}:{window_name}", resume_cmd, "Enter")
+            except tmux.TmuxError:
+                pass
             write_switch({"type": "session", "target": target_session})
         else:
             # Create a new tmux session
             session_name = f"resume-{session_id[:8]}"
-            subprocess.run([
-                "tmux", "new-session", "-d",
-                "-s", session_name,
-                "-c", entry.project,
-            ])
-            subprocess.run([
-                "tmux", "send-keys", "-t", session_name,
-                resume_cmd, "Enter",
-            ])
+            try:
+                tmux.new_session(session_name, entry.project)
+                tmux.send_keys(session_name, resume_cmd, "Enter")
+            except tmux.TmuxError:
+                pass
             write_switch({"type": "session", "target": session_name})
 
         self.app.exit()
@@ -231,34 +224,5 @@ class HistoryScreen(Screen):
         dock: top;
         margin: 0 1;
         height: 3;
-    }
-    DataTable {
-        background: #1a1a2e;
-        color: #e0e0e0;
-        height: 1fr;
-    }
-    DataTable > .datatable--header {
-        background: #16213e;
-        color: #00aaff;
-        text-style: bold;
-    }
-    DataTable > .datatable--cursor {
-        background: #0f3460;
-        color: #ffffff;
-    }
-    DataTable > .datatable--hover {
-        background: #16213e;
-    }
-    Footer {
-        background: #16213e;
-        color: #aaaaaa;
-    }
-    Footer > .footer--highlight {
-        background: #0f3460;
-        color: #00aaff;
-    }
-    Footer > .footer--key {
-        color: #00aaff;
-        text-style: bold;
     }
     """

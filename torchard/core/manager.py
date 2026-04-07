@@ -82,17 +82,21 @@ class Manager:
                 return wt
         return None
 
+    def _get_or_create_repo(self, repo_path: str) -> Repo:
+        repo = self._get_repo_by_path(repo_path)
+        if repo is None:
+            default_branch = git.detect_default_branch(repo_path)
+            name = Path(repo_path).name
+            repo = add_repo(self._conn, Repo(path=repo_path, name=name, default_branch=default_branch))
+        return repo
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def create_session(self, repo_path: str, base_branch: str, session_name: str, subdirectory: str | None = None) -> Session:
         """Register repo if needed, create worktree, create DB session, create tmux session."""
-        repo = self._get_repo_by_path(repo_path)
-        if repo is None:
-            default_branch = git.detect_default_branch(repo_path)
-            name = Path(repo_path).name
-            repo = add_repo(self._conn, Repo(path=repo_path, name=name, default_branch=default_branch))
+        repo = self._get_or_create_repo(repo_path)
 
         # If the base branch is the repo's default branch, start in the repo root.
         # Otherwise create a worktree for the feature branch.
@@ -153,11 +157,7 @@ class Manager:
 
     def adopt_session(self, session_name: str, repo_path: str, base_branch: str) -> Session:
         """Adopt an existing tmux session into torchard's management."""
-        repo = self._get_repo_by_path(repo_path)
-        if repo is None:
-            default_branch = git.detect_default_branch(repo_path)
-            name = Path(repo_path).name
-            repo = add_repo(self._conn, Repo(path=repo_path, name=name, default_branch=default_branch))
+        repo = self._get_or_create_repo(repo_path)
 
         session = add_session(
             self._conn,
@@ -209,11 +209,7 @@ class Manager:
 
         Returns (session, worktree_path) so the caller can launch claude in it.
         """
-        repo = self._get_repo_by_path(repo_path)
-        if repo is None:
-            default_branch = git.detect_default_branch(repo_path)
-            name = Path(repo_path).name
-            repo = add_repo(self._conn, Repo(path=repo_path, name=name, default_branch=default_branch))
+        repo = self._get_or_create_repo(repo_path)
 
         # Resolve PR number to branch name
         if pr_or_branch.isdigit():
@@ -319,7 +315,7 @@ class Manager:
 
         try:
             tmux.kill_session(session.name)
-        except Exception:
+        except tmux.TmuxError:
             pass
 
         db_delete_session(self._conn, session_id)

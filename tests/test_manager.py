@@ -9,6 +9,7 @@ import pytest
 
 from torchard.core.db import get_repos, get_sessions, get_worktrees, init_db, set_config
 from torchard.core.manager import Manager
+from torchard.core.tmux import TmuxError
 from torchard.core.models import Repo, Session, Worktree
 
 
@@ -227,7 +228,7 @@ class TestDeleteSession:
         with _patch_git_detect(), _patch_tmux_new_session():
             session = mgr.create_session(REPO_PATH, "main", SESSION_NAME)
 
-        with patch("torchard.core.manager.tmux.kill_session", side_effect=Exception("tmux gone")):
+        with patch("torchard.core.manager.tmux.kill_session", side_effect=TmuxError("tmux gone")):
             # Should not raise
             mgr.delete_session(session.id)
 

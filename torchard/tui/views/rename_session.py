@@ -61,7 +61,7 @@ class RenameSessionScreen(Screen):
             return
         try:
             self._manager.rename_session(self._session_id, name)
-        except Exception as exc:
+        except (ValueError, tmux.TmuxError) as exc:
             error.update(f"[red]{exc}[/red]")
             return
         self.app.pop_screen()
@@ -142,7 +142,7 @@ class RenameWindowScreen(Screen):
             return
         try:
             tmux.rename_window(self._session_name, self._window_index, name)
-        except Exception as exc:
+        except tmux.TmuxError as exc:
             error.update(f"[red]{exc}[/red]")
             return
         self.app.pop_screen()

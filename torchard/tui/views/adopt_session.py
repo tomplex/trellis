@@ -10,6 +10,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Input, Label, ListItem, ListView, Static
 
+from torchard.core import tmux
 from torchard.core.db import get_repos
 from torchard.core.git import GitError, list_branches
 from torchard.core.manager import Manager
@@ -219,7 +220,7 @@ class AdoptSessionScreen(Screen):
                 repo_path=self._selected_repo.path,
                 base_branch=base_branch,
             )
-        except Exception as exc:
+        except (GitError, tmux.TmuxError) as exc:
             self._set_error(f"Error: {exc}")
             return
         self.app.pop_screen()

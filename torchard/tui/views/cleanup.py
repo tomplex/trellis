@@ -7,6 +7,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
 
+from torchard.core import git, tmux
 from torchard.core.db import get_sessions, get_worktrees
 from torchard.core.manager import Manager
 from torchard.core.models import Session, Worktree
@@ -181,7 +182,7 @@ class CleanupScreen(Screen):
                 try:
                     self._manager.cleanup_worktree(wt.id)
                     deleted_keys.append(key)
-                except Exception as exc:
+                except (git.GitError, tmux.TmuxError) as exc:
                     errors.append(f"{wt.branch}: {exc}")
 
             table = self.query_one(DataTable)
@@ -220,35 +221,6 @@ class CleanupScreen(Screen):
         color: #aaaaaa;
         padding: 0 2 1 2;
         height: 1;
-    }
-    DataTable {
-        background: #1a1a2e;
-        color: #e0e0e0;
-        height: 1fr;
-    }
-    DataTable > .datatable--header {
-        background: #16213e;
-        color: #00aaff;
-        text-style: bold;
-    }
-    DataTable > .datatable--cursor {
-        background: #0f3460;
-        color: #ffffff;
-    }
-    DataTable > .datatable--hover {
-        background: #16213e;
-    }
-    Footer {
-        background: #16213e;
-        color: #aaaaaa;
-    }
-    Footer > .footer--highlight {
-        background: #0f3460;
-        color: #00aaff;
-    }
-    Footer > .footer--key {
-        color: #00aaff;
-        text-style: bold;
     }
     """
 

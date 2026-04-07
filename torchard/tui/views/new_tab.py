@@ -8,7 +8,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, Label, Static
 from textual.containers import Vertical
 
-from torchard.core import tmux
+from torchard.core import git, tmux
 from torchard.core.manager import Manager
 from torchard.tui.switch import write_switch
 
@@ -58,7 +58,7 @@ class NewTabScreen(Screen):
 
         try:
             self._manager.add_tab(self._session_id, branch_name)
-        except Exception as exc:
+        except (git.GitError, tmux.TmuxError) as exc:
             error_widget.update(f"[red]{exc}[/red]")
             return
 
