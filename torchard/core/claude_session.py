@@ -53,8 +53,8 @@ def classify_pane(pane_text: str) -> str:
 
     tail = "\n".join(lines[-6:])
 
-    # Actively generating output
-    if "Generating" in tail or "Streaming" in tail:
+    # Actively thinking — claude shows "· Beboppin'…", "· Groovin'…", etc.
+    if re.search(r"^·\s+\S+…", tail, re.MULTILINE):
         return "thinking"
 
     # Running a tool
