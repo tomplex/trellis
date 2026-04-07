@@ -44,7 +44,7 @@ def _patch_git_detect(branch="main"):
 
 
 def _patch_tmux_new_session():
-    return patch("torchard.core.manager.tmux.new_session")
+    return patch("torchard.core.manager._apply_layout")
 
 
 def _patch_tmux_new_window():

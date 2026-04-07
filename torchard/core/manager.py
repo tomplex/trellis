@@ -26,6 +26,33 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Each entry: (window_name, command_to_send | None)
+DEFAULT_LAYOUT: list[tuple[str, str | None]] = [
+    ("claude", "claude"),
+    ("shell", None),
+]
+
+
+def _apply_layout(session_name: str, working_dir: str, layout: list[tuple[str, str | None]] = DEFAULT_LAYOUT) -> None:
+    """Create a tmux session and set up windows according to *layout*.
+
+    The first entry becomes the initial window (renamed in place).
+    Subsequent entries are added as new windows. If a command is specified
+    it is sent to the window via send-keys.
+    """
+    tmux.new_session(session_name, working_dir)
+    for i, (name, command) in enumerate(layout):
+        if i == 0:
+            tmux.rename_window(session_name, 1, name)
+        else:
+            tmux.new_window(session_name, name, working_dir)
+        if command:
+            tmux.send_keys(f"{session_name}:{name}", command, "Enter")
+    # Focus the first window
+    if layout:
+        tmux.select_window(session_name, 1)
+
+
 def detect_subsystems(repo_path: str) -> list[str]:
     """Detect subsystem directories in a monorepo (e.g. workers/model_train, src/sojourner)."""
     root = Path(repo_path)
@@ -130,15 +157,7 @@ class Manager:
         if subdirectory:
             effective_dir = str(Path(start_dir) / subdirectory)
 
-        if start_dir != repo_path:
-            # Feature branch: 3-window layout (claude, diff, shell)
-            tmux.new_session(session_name, effective_dir)
-            tmux.rename_window(session_name, 1, "claude")
-            tmux.send_keys(f"{session_name}:claude", "claude", "Enter")
-            tmux.new_window(session_name, "shell", effective_dir)
-            tmux.select_window(session_name, 1)
-        else:
-            tmux.new_session(session_name, effective_dir)
+        _apply_layout(session_name, effective_dir)
 
         # Record worktree if we created one
         if start_dir != repo_path:
@@ -243,10 +262,7 @@ class Manager:
                 created_at=_now(),
             ),
         )
-        tmux.new_session(session_name, worktree_path)
-        tmux.rename_window(session_name, 1, "claude")
-        tmux.new_window(session_name, "shell", worktree_path)
-        tmux.select_window(session_name, 1)
+        _apply_layout(session_name, worktree_path)
 
         # Record worktree
         add_worktree(
