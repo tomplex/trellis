@@ -311,22 +311,7 @@ impl HistoryScreen {
             }
             b
         };
-
-        let spans: Vec<Span> = bindings
-            .iter()
-            .enumerate()
-            .flat_map(|(i, (key, desc))| {
-                let mut v = Vec::new();
-                if i > 0 {
-                    v.push(Span::styled("  ", theme::style_footer()));
-                }
-                v.push(Span::styled(*key, theme::style_footer_key()));
-                v.push(Span::styled(format!(" {}", desc), theme::style_footer()));
-                v
-            })
-            .collect();
-
-        Paragraph::new(Line::from(spans)).style(theme::style_footer())
+        super::rename::render_footer_bindings(&bindings)
     }
 }
 

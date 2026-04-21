@@ -1,3 +1,7 @@
+/// Case-insensitive fuzzy match. Returns a score where lower is better.
+/// Consecutive character matches get a bonus (-1 each), while gaps add the
+/// text position to the score. An exact match of "abc" in "abc" scores -2.
+/// Returns None if not all query characters are found in order.
 pub fn fuzzy_match(query: &str, text: &str) -> Option<i32> {
     let query: Vec<char> = query.to_lowercase().chars().collect();
     let text: Vec<char> = text.to_lowercase().chars().collect();

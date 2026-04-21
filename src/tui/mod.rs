@@ -12,6 +12,14 @@ pub mod history;
 pub mod cleanup;
 pub mod settings;
 
+/// A lightweight repo stand-in (name + path, no DB id required).
+/// Used by wizard screens that let the user pick a repo.
+#[derive(Clone)]
+pub struct SelectedRepo {
+    pub name: String,
+    pub path: String,
+}
+
 use std::time::Duration;
 
 use crossterm::event::{self, Event};

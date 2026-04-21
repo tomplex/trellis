@@ -4,7 +4,7 @@ mod db;
 mod tmux;
 mod git;
 mod manager;
-mod claude_session;
+mod claude_pane;
 mod conversation_index;
 mod fuzzy;
 mod switch;

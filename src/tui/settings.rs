@@ -4,7 +4,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use crate::db;
 use crate::manager::Manager;
 use super::{ScreenAction, ScreenBehavior};
 use super::theme;
@@ -43,7 +42,7 @@ pub struct SettingsScreen {
 impl SettingsScreen {
     pub fn new(manager: &Manager) -> Self {
         let config: std::collections::HashMap<String, String> =
-            db::get_all_config(&manager.conn).into_iter().collect();
+            manager.get_all_config().into_iter().collect();
 
         let fields = CONFIG_KEYS
             .iter()
@@ -77,7 +76,7 @@ impl SettingsScreen {
             }
         }
         for field in &self.fields {
-            db::set_config(&manager.conn, &field.key, field.value.trim());
+            manager.set_config(&field.key, field.value.trim());
         }
         self.status = "Saved.".to_string();
         self.status_is_error = false;

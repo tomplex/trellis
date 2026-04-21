@@ -1,4 +1,4 @@
-// trellis/src/claude_session.rs
+// trellis/src/claude_pane.rs
 
 use regex::Regex;
 use std::fs;

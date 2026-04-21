@@ -778,4 +778,16 @@ impl Manager {
     pub fn get_session_by_name(&self, name: &str) -> Option<Session> {
         db::get_session_by_name(&self.conn, name)
     }
+
+    pub fn get_all_config(&self) -> Vec<(String, String)> {
+        db::get_all_config(&self.conn)
+    }
+
+    pub fn set_config(&self, key: &str, value: &str) {
+        db::set_config(&self.conn, key, value);
+    }
+
+    pub fn get_all_worktrees(&self) -> Vec<Worktree> {
+        db::get_worktrees(&self.conn)
+    }
 }

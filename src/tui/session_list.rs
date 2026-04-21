@@ -7,7 +7,7 @@ use md5::{Md5, Digest};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState};
 
-use crate::claude_session;
+use crate::claude_pane;
 use crate::fuzzy::fuzzy_match;
 use crate::manager::Manager;
 use crate::models::{Repo, SessionInfo};
@@ -106,22 +106,23 @@ fn assign_repo_colors(repo_names: &HashSet<String>) -> HashMap<String, Color> {
 // --------------------------------------------------------------------------
 
 fn try_rename_claude_window(session_name: &str, win: &mut TmuxWindow) {
-    let session_id = match claude_session::get_session_id(&win.pane_pid) {
+    let session_id = match claude_pane::get_session_id(&win.pane_pid) {
         Some(id) => id,
         None => return,
     };
-    let msg = match claude_session::get_first_user_message(&session_id) {
+    let msg = match claude_pane::get_first_user_message(&session_id) {
         Some(m) => m,
         None => return,
     };
-    let name = claude_session::summarize_message(&msg, 4);
+    let name = claude_pane::summarize_message(&msg, 4);
     if tmux::rename_window(session_name, win.index, &name).is_ok() {
         win.name = name;
     }
 }
 
-fn is_version_number(s: &str) -> bool {
-    // Matches patterns like "1.2.3"
+/// Claude Code's pane_current_command reports as a version number (e.g. "0.1.42").
+/// We use this heuristic to detect Claude panes.
+fn looks_like_claude_command(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     parts.len() >= 3 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()))
 }
@@ -402,10 +403,10 @@ impl SessionListScreen {
                             if win.path.starts_with(path) { Some(branch) } else { None }
                         })
                     });
-                    let is_claude = !win.command.is_empty() && is_version_number(&win.command);
+                    let is_claude = !win.command.is_empty() && looks_like_claude_command(&win.command);
 
                     // Auto-rename version-numbered claude windows
-                    if is_claude && is_version_number(&win.name) {
+                    if is_claude && looks_like_claude_command(&win.name) {
                         try_rename_claude_window(&session.name, win);
                     }
 
@@ -415,7 +416,7 @@ impl SessionListScreen {
                             &format!("{}:{}", session.name, win.index),
                             8,
                         );
-                        let state = claude_session::classify_pane(&pane_text);
+                        let state = claude_pane::classify_pane(&pane_text);
                         match state {
                             "working" => {
                                 col_repo_child.push(StyledSegment::new("✦ working…", Style::default().fg(theme::ORANGE)));
@@ -958,7 +959,7 @@ impl SessionListScreen {
     }
 
     fn render_footer<'a>(&self) -> Paragraph<'a> {
-        let bindings = vec![
+        super::rename::render_footer_bindings(&[
             ("q", "Quit"),
             ("/", "Filter"),
             ("enter", "Switch"),
@@ -973,19 +974,7 @@ impl SessionListScreen {
             ("c", "Cleanup"),
             ("S", "Settings"),
             ("?", "Help"),
-        ];
-
-        let mut spans = Vec::new();
-        for (i, (key, label)) in bindings.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled("  ", theme::style_footer()));
-            }
-            spans.push(Span::styled(*key, theme::style_footer_key()));
-            spans.push(Span::styled(format!(" {}", label), theme::style_footer()));
-        }
-
-        Paragraph::new(Line::from(spans))
-            .style(theme::style_footer())
+        ])
     }
 
     fn handle_rename_key(&mut self, code: KeyCode, modifiers: crossterm::event::KeyModifiers, manager: &mut Manager) -> ScreenAction {

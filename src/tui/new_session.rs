@@ -23,14 +23,7 @@ enum Step {
 }
 
 // ---------------------------------------------------------------------------
-// A lightweight repo stand-in (name + path, no DB id required)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct SelectedRepo {
-    name: String,
-    path: String,
-}
+use super::SelectedRepo;
 
 // ---------------------------------------------------------------------------
 // NewSessionScreen

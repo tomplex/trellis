@@ -142,6 +142,19 @@ pub fn render_modal_box(f: &mut Frame, area: Rect, title: &str, width: u16, heig
     inner
 }
 
+/// Render a footer bar from key-description pairs with consistent styling.
+pub fn render_footer_bindings<'a>(bindings: &[(&'a str, &'a str)]) -> Paragraph<'a> {
+    let mut spans = Vec::new();
+    for (i, (key, desc)) in bindings.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", theme::style_footer()));
+        }
+        spans.push(Span::styled(*key, theme::style_footer_key()));
+        spans.push(Span::styled(format!(" {}", desc), theme::style_footer()));
+    }
+    Paragraph::new(Line::from(spans)).style(theme::style_footer())
+}
+
 // ---------------------------------------------------------------------------
 // RenameSessionScreen
 // ---------------------------------------------------------------------------

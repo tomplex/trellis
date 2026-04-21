@@ -25,11 +25,7 @@ enum Step {
 // A repo selection (either from DB or ad-hoc path entry)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
-struct SelectedRepo {
-    name: String,
-    path: String,
-}
+use super::SelectedRepo;
 
 // ---------------------------------------------------------------------------
 // AdoptSessionScreen

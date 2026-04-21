@@ -7,7 +7,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState};
 
-use crate::db;
 use crate::git;
 use crate::manager::Manager;
 use crate::models::Worktree;
@@ -36,7 +35,7 @@ pub struct CleanupScreen {
 
 impl CleanupScreen {
     pub fn new(manager: &Manager) -> Self {
-        let worktrees = db::get_worktrees(&manager.conn);
+        let worktrees = manager.get_all_worktrees();
         let sessions = manager.get_sessions();
 
         // Build session name lookup: session_id -> session name
@@ -220,30 +219,14 @@ impl CleanupScreen {
     }
 
     fn render_footer(&self) -> Paragraph<'_> {
-        let bindings: Vec<(&str, &str)> = vec![
+        super::rename::render_footer_bindings(&[
             ("esc", "back"),
             ("j/k", "navigate"),
             ("space", "toggle"),
             ("a", "select all"),
             ("A", "deselect all"),
             ("d", "delete"),
-        ];
-
-        let spans: Vec<Span> = bindings
-            .iter()
-            .enumerate()
-            .flat_map(|(i, (key, desc))| {
-                let mut v = Vec::new();
-                if i > 0 {
-                    v.push(Span::styled("  ", theme::style_footer()));
-                }
-                v.push(Span::styled(*key, theme::style_footer_key()));
-                v.push(Span::styled(format!(" {}", desc), theme::style_footer()));
-                v
-            })
-            .collect();
-
-        Paragraph::new(Line::from(spans)).style(theme::style_footer())
+        ])
     }
 }
 
