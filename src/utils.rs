@@ -1,3 +1,9 @@
+pub fn utc_now() -> String {
+    use time::OffsetDateTime;
+    let now = OffsetDateTime::now_utc();
+    now.format(&time::format_description::well_known::Rfc3339).unwrap()
+}
+
 pub fn truncate_end(text: &str, max_len: usize) -> String {
     if text.chars().count() <= max_len {
         return text.to_string();

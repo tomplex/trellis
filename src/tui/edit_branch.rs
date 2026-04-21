@@ -143,52 +143,8 @@ impl EditBranchScreen {
     }
 
     fn handle_filter_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        match code {
-            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter.insert(self.filter_cursor, c);
-                self.filter_cursor += c.len_utf8();
-                self.rebuild_display();
-            }
-            KeyCode::Backspace => {
-                if self.filter_cursor > 0 {
-                    let prev = self.filter[..self.filter_cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.filter.drain(prev..self.filter_cursor);
-                    self.filter_cursor = prev;
-                    self.rebuild_display();
-                }
-            }
-            KeyCode::Left => {
-                if self.filter_cursor > 0 {
-                    let prev = self.filter[..self.filter_cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.filter_cursor = prev;
-                }
-            }
-            KeyCode::Right => {
-                if self.filter_cursor < self.filter.len() {
-                    let next = self.filter[self.filter_cursor..]
-                        .char_indices()
-                        .nth(1)
-                        .map(|(i, _)| self.filter_cursor + i)
-                        .unwrap_or(self.filter.len());
-                    self.filter_cursor = next;
-                }
-            }
-            KeyCode::Home => {
-                self.filter_cursor = 0;
-            }
-            KeyCode::End => {
-                self.filter_cursor = self.filter.len();
-            }
-            _ => {}
-        }
+        super::rename::input_handle_key(&mut self.filter, &mut self.filter_cursor, code, modifiers);
+        self.rebuild_display();
     }
 }
 
@@ -196,37 +152,9 @@ impl ScreenBehavior for EditBranchScreen {
     fn render(&self, f: &mut Frame, area: Rect, _manager: &Manager) {
         let width = 92u16;
         let list_height = 18u16;
-        // title + hint + filter + list + error + hint = ~24 + borders
         let height = (list_height + 8).min(area.height.saturating_sub(4));
-
-        let vert = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(height),
-            Constraint::Fill(1),
-        ])
-        .split(area);
-
-        let horiz = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(width),
-            Constraint::Fill(1),
-        ])
-        .split(vert[1]);
-
-        let box_area = horiz[1];
-
-        let block = Block::default()
-            .title(Span::styled(
-                format!(" Edit Branch — {} ", self.session_name),
-                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
-            ))
-            .title_alignment(Alignment::Center)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::ACCENT))
-            .style(Style::default().fg(theme::TEXT).bg(theme::HEADER_BG));
-
-        let inner = block.inner(box_area);
-        f.render_widget(block, box_area);
+        let title = format!("Edit Branch — {}", self.session_name);
+        let inner = super::rename::render_modal_box(f, area, &title, width, height);
 
         let chunks = Layout::vertical([
             Constraint::Length(1), // hint
@@ -246,30 +174,13 @@ impl ScreenBehavior for EditBranchScreen {
         f.render_widget(hint, chunks[0]);
 
         // Filter input
-        let before = &self.filter[..self.filter_cursor];
-        let cursor_char_len = self.filter[self.filter_cursor..]
-            .chars()
-            .next()
-            .map(|c| c.len_utf8())
-            .unwrap_or(0);
-        let cursor_display = if self.filter_cursor < self.filter.len() {
-            self.filter[self.filter_cursor..self.filter_cursor + cursor_char_len].to_string()
-        } else {
-            " ".to_string()
-        };
-        let after = if self.filter_cursor + cursor_char_len <= self.filter.len() {
-            &self.filter[self.filter_cursor + cursor_char_len..]
-        } else {
-            ""
-        };
-
-        let filter_line = Line::from(vec![
-            Span::styled("Filter: ", Style::default().fg(theme::TEXT_DIM)),
-            Span::styled(before.to_string(), Style::default().fg(theme::TEXT)),
-            Span::styled(cursor_display, theme::style_cursor()),
-            Span::styled(after.to_string(), Style::default().fg(theme::TEXT)),
-        ]);
-        f.render_widget(Paragraph::new(filter_line), chunks[2]);
+        let filter_label = Rect::new(chunks[2].x, chunks[2].y, 8, 1);
+        let filter_input_area = Rect::new(chunks[2].x + 8, chunks[2].y, chunks[2].width.saturating_sub(8), 1);
+        f.render_widget(
+            Paragraph::new(Span::styled("Filter: ", Style::default().fg(theme::TEXT_DIM))),
+            filter_label,
+        );
+        super::rename::render_input(f, filter_input_area, &self.filter, self.filter_cursor);
 
         // Branch list
         let list_block = Block::default()

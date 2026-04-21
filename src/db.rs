@@ -197,7 +197,7 @@ pub fn get_session_by_name(conn: &Connection, name: &str) -> Option<Session> {
 }
 
 pub fn touch_session(conn: &Connection, session_id: i64) {
-    let now = utc_now_iso();
+    let now = utc_now();
     conn.execute(
         "UPDATE sessions SET last_selected_at = ?1 WHERE id = ?2",
         params![now, session_id],
@@ -299,11 +299,7 @@ pub fn delete_worktree(conn: &Connection, worktree_id: i64) {
     .unwrap();
 }
 
-fn utc_now_iso() -> String {
-    use time::OffsetDateTime;
-    let now = OffsetDateTime::now_utc();
-    now.format(&time::format_description::well_known::Rfc3339).unwrap()
-}
+use crate::utils::utc_now;
 
 #[cfg(test)]
 mod tests {

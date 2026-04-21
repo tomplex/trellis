@@ -11,12 +11,7 @@ use crate::git;
 use crate::models::{Repo, Session, SessionInfo, Worktree};
 use crate::tmux;
 
-fn utc_now() -> String {
-    use time::OffsetDateTime;
-    let now = OffsetDateTime::now_utc();
-    now.format(&time::format_description::well_known::Rfc3339)
-        .unwrap()
-}
+use crate::utils::utc_now;
 
 /// Default tmux layout: (window_name, optional command to send).
 const DEFAULT_LAYOUT: &[(&str, Option<&str>)] = &[

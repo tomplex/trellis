@@ -1332,18 +1332,23 @@ impl ScreenBehavior for SessionListScreen {
                         vec![Span::styled("    ", Style::default().bg(theme::CURSOR_BG))]
                     };
 
-                    // Build the input display with cursor
-                    let before: String = input.chars().take(*cursor_pos).collect();
-                    let cursor_char = input.chars().nth(*cursor_pos).unwrap_or(' ');
-                    let after: String = input.chars().skip(*cursor_pos + 1).collect();
+                    // Build the input display with cursor (cursor_pos is a byte index)
+                    let before = &input[..*cursor_pos];
+                    let cursor_char_len = input[*cursor_pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                    let cursor_display = if *cursor_pos < input.len() {
+                        &input[*cursor_pos..*cursor_pos + cursor_char_len]
+                    } else {
+                        " "
+                    };
+                    let after = &input[(*cursor_pos + cursor_char_len).min(input.len())..];
 
                     let mut spans = row_prefix;
-                    spans.push(Span::styled(&before, Style::default().fg(theme::TEXT).bg(theme::CURSOR_BG)));
+                    spans.push(Span::styled(before.to_string(), Style::default().fg(theme::TEXT).bg(theme::CURSOR_BG)));
                     spans.push(Span::styled(
-                        cursor_char.to_string(),
+                        cursor_display.to_string(),
                         Style::default().fg(theme::BG).bg(theme::ACCENT),
                     ));
-                    spans.push(Span::styled(&after, Style::default().fg(theme::TEXT).bg(theme::CURSOR_BG)));
+                    spans.push(Span::styled(after.to_string(), Style::default().fg(theme::TEXT).bg(theme::CURSOR_BG)));
 
                     let input_widget = Paragraph::new(Line::from(spans))
                         .style(Style::default().bg(theme::CURSOR_BG));
@@ -1355,15 +1360,20 @@ impl ScreenBehavior for SessionListScreen {
                 let prefix = format!("Review ({}): ", repo_name);
                 let suffix = if repos.len() > 1 { "  [tab] cycle repo  [esc] cancel" } else { "  [esc] cancel" };
 
-                let before: String = input.chars().take(*cursor_pos).collect();
-                let cursor_char = input.chars().nth(*cursor_pos).unwrap_or(' ');
-                let after: String = input.chars().skip(*cursor_pos + 1).collect();
+                let before = &input[..*cursor_pos];
+                let cursor_char_len = input[*cursor_pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                let cursor_display = if *cursor_pos < input.len() {
+                    input[*cursor_pos..*cursor_pos + cursor_char_len].to_string()
+                } else {
+                    " ".to_string()
+                };
+                let after = &input[(*cursor_pos + cursor_char_len).min(input.len())..];
 
                 let spans = vec![
                     Span::styled(&prefix, Style::default().fg(theme::ACCENT)),
-                    Span::styled(&before, Style::default().fg(theme::TEXT)),
-                    Span::styled(cursor_char.to_string(), Style::default().fg(theme::BG).bg(theme::ACCENT)),
-                    Span::styled(&after, Style::default().fg(theme::TEXT)),
+                    Span::styled(before.to_string(), Style::default().fg(theme::TEXT)),
+                    Span::styled(cursor_display, Style::default().fg(theme::BG).bg(theme::ACCENT)),
+                    Span::styled(after.to_string(), Style::default().fg(theme::TEXT)),
                     Span::styled(suffix, Style::default().fg(theme::TEXT_DIM)),
                 ];
                 let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG));
@@ -1373,15 +1383,20 @@ impl ScreenBehavior for SessionListScreen {
                 let prefix = format!("New tab in '{}': ", session_name);
                 let suffix = "  [enter] create  [esc] cancel";
 
-                let before: String = input.chars().take(*cursor_pos).collect();
-                let cursor_char = input.chars().nth(*cursor_pos).unwrap_or(' ');
-                let after: String = input.chars().skip(*cursor_pos + 1).collect();
+                let before = &input[..*cursor_pos];
+                let cursor_char_len = input[*cursor_pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                let cursor_display = if *cursor_pos < input.len() {
+                    input[*cursor_pos..*cursor_pos + cursor_char_len].to_string()
+                } else {
+                    " ".to_string()
+                };
+                let after = &input[(*cursor_pos + cursor_char_len).min(input.len())..];
 
                 let spans = vec![
                     Span::styled(&prefix, Style::default().fg(theme::ACCENT)),
-                    Span::styled(&before, Style::default().fg(theme::TEXT)),
-                    Span::styled(cursor_char.to_string(), Style::default().fg(theme::BG).bg(theme::ACCENT)),
-                    Span::styled(&after, Style::default().fg(theme::TEXT)),
+                    Span::styled(before.to_string(), Style::default().fg(theme::TEXT)),
+                    Span::styled(cursor_display, Style::default().fg(theme::BG).bg(theme::ACCENT)),
+                    Span::styled(after.to_string(), Style::default().fg(theme::TEXT)),
                     Span::styled(suffix, Style::default().fg(theme::TEXT_DIM)),
                 ];
                 let status = Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG));
