@@ -16,7 +16,7 @@ use crate::tmux::{self, TmuxWindow};
 use crate::utils::truncate_end;
 
 use super::theme;
-use super::{ActionResult, Screen, ScreenAction, ScreenBehavior};
+use super::{ActionResult, ScreenAction, ScreenBehavior};
 
 /// Identifies what a row represents.
 #[derive(Debug, Clone)]
@@ -887,21 +887,21 @@ impl SessionListScreen {
         }
 
         let screen = super::history::HistoryScreen::new(manager, scope_paths, scope_label);
-        ScreenAction::Push(Screen::History(screen))
+        ScreenAction::Push(Box::new(screen))
     }
 
     fn action_cleanup(&self, manager: &Manager) -> ScreenAction {
         let screen = super::cleanup::CleanupScreen::new(manager);
-        ScreenAction::Push(Screen::Cleanup(screen))
+        ScreenAction::Push(Box::new(screen))
     }
 
     fn action_settings(&self, manager: &Manager) -> ScreenAction {
         let screen = super::settings::SettingsScreen::new(manager);
-        ScreenAction::Push(Screen::Settings(screen))
+        ScreenAction::Push(Box::new(screen))
     }
 
     fn action_help(&self) -> ScreenAction {
-        ScreenAction::Push(Screen::Help(super::help::HelpScreen))
+        ScreenAction::Push(Box::new(super::help::HelpScreen))
     }
 
     // ------------------------------------------------------------------
@@ -928,7 +928,7 @@ impl SessionListScreen {
                         id,
                         session.name.clone(),
                     );
-                    ScreenAction::Push(Screen::EditBranch(screen))
+                    ScreenAction::Push(Box::new(screen))
                 } else {
                     ScreenAction::None
                 }
@@ -952,7 +952,7 @@ impl SessionListScreen {
                     manager,
                     session.name.clone(),
                 );
-                ScreenAction::Push(Screen::AdoptSession(screen))
+                ScreenAction::Push(Box::new(screen))
             }
             _ => ScreenAction::None,
         }
@@ -1536,7 +1536,7 @@ impl ScreenBehavior for SessionListScreen {
             }
             KeyCode::Char('n') => {
                 let screen = super::new_session::NewSessionScreen::new(manager);
-                ScreenAction::Push(Screen::NewSession(screen))
+                ScreenAction::Push(Box::new(screen))
             }
             KeyCode::Char('t') => self.action_new_tab(manager),
             KeyCode::Char('r') => self.action_rename(manager),

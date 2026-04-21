@@ -96,7 +96,7 @@ pub enum ActionResult {
 
 pub enum ScreenAction {
     None,
-    Push(Screen),
+    Push(Box<dyn ScreenBehavior>),
     Pop,
     PopWith(ActionResult),
     Switch(SwitchAction),
@@ -116,57 +116,9 @@ pub trait ScreenBehavior {
     }
 }
 
-pub enum Screen {
-    SessionList(session_list::SessionListScreen),
-    Confirm(confirm::ConfirmScreen),
-    Help(help::HelpScreen),
-    NewSession(new_session::NewSessionScreen),
-    AdoptSession(adopt_session::AdoptSessionScreen),
-    RenameSession(rename::RenameSessionScreen),
-    RenameWindow(rename::RenameWindowScreen),
-    EditBranch(edit_branch::EditBranchScreen),
-    History(history::HistoryScreen),
-    Cleanup(cleanup::CleanupScreen),
-    Settings(settings::SettingsScreen),
-}
-
-impl Screen {
-    fn behavior(&self) -> &dyn ScreenBehavior {
-        match self {
-            Screen::SessionList(s) => s,
-            Screen::Confirm(s) => s,
-            Screen::Help(s) => s,
-            Screen::NewSession(s) => s,
-            Screen::AdoptSession(s) => s,
-            Screen::RenameSession(s) => s,
-            Screen::RenameWindow(s) => s,
-            Screen::EditBranch(s) => s,
-            Screen::History(s) => s,
-            Screen::Cleanup(s) => s,
-            Screen::Settings(s) => s,
-        }
-    }
-
-    fn behavior_mut(&mut self) -> &mut dyn ScreenBehavior {
-        match self {
-            Screen::SessionList(s) => s,
-            Screen::Confirm(s) => s,
-            Screen::Help(s) => s,
-            Screen::NewSession(s) => s,
-            Screen::AdoptSession(s) => s,
-            Screen::RenameSession(s) => s,
-            Screen::RenameWindow(s) => s,
-            Screen::EditBranch(s) => s,
-            Screen::History(s) => s,
-            Screen::Cleanup(s) => s,
-            Screen::Settings(s) => s,
-        }
-    }
-}
-
 pub struct App {
     pub manager: Manager,
-    screen_stack: Vec<Screen>,
+    screen_stack: Vec<Box<dyn ScreenBehavior>>,
     should_quit: bool,
 }
 
@@ -188,7 +140,7 @@ impl App {
 
         // Push initial screen
         let initial = session_list::SessionListScreen::new(&self.manager);
-        self.screen_stack.push(Screen::SessionList(initial));
+        self.screen_stack.push(Box::new(initial));
 
         while !self.should_quit {
             // Draw
@@ -198,7 +150,7 @@ impl App {
 
             // Tick the top screen (for background work like staleness checks)
             if let Some(top) = self.screen_stack.last_mut() {
-                let action = top.behavior_mut().tick(&mut self.manager);
+                let action = top.tick(&mut self.manager);
                 self.process_action(action);
             }
 
@@ -206,7 +158,7 @@ impl App {
             if event::poll(Duration::from_millis(50)).unwrap_or(false) {
                 if let Ok(ev) = event::read() {
                     if let Some(top) = self.screen_stack.last_mut() {
-                        let action = top.behavior_mut().handle_event(&ev, &mut self.manager);
+                        let action = top.handle_event(&ev, &mut self.manager);
                         self.process_action(action);
                     }
                 }
@@ -229,10 +181,10 @@ impl App {
         for (i, screen) in self.screen_stack.iter().enumerate() {
             let is_top = i == self.screen_stack.len() - 1;
             if is_top {
-                screen.behavior().render(f, area, &self.manager);
-            } else if i + 1 < self.screen_stack.len() && self.screen_stack[i + 1].behavior().is_modal() {
+                screen.render(f, area, &self.manager);
+            } else if i + 1 < self.screen_stack.len() && self.screen_stack[i + 1].is_modal() {
                 // Render parent of a modal, then clear and overlay a dark background.
-                screen.behavior().render(f, area, &self.manager);
+                screen.render(f, area, &self.manager);
                 f.render_widget(Clear, area);
                 let dim = Block::default().style(Style::default().bg(Color::Rgb(0x0d, 0x0d, 0x1a)));
                 f.render_widget(dim, area);
@@ -251,13 +203,13 @@ impl App {
                 if self.screen_stack.is_empty() {
                     self.should_quit = true;
                 } else if let Some(top) = self.screen_stack.last_mut() {
-                    top.behavior_mut().on_resume(&mut self.manager);
+                    top.on_resume(&mut self.manager);
                 }
             }
             ScreenAction::PopWith(result) => {
                 self.screen_stack.pop();
                 if let Some(top) = self.screen_stack.last_mut() {
-                    let action = top.behavior_mut().on_child_result(result, &mut self.manager);
+                    let action = top.on_child_result(result, &mut self.manager);
                     self.process_action(action);
                 }
             }

@@ -14,7 +14,7 @@ use crate::utils::truncate_start;
 
 use super::confirm::ConfirmScreen;
 use super::theme;
-use super::{ActionResult, Screen, ScreenAction, ScreenBehavior};
+use super::{ActionResult, ScreenAction, ScreenBehavior};
 
 struct WorktreeRow {
     wt_id: i64,
@@ -383,7 +383,7 @@ impl ScreenBehavior for CleanupScreen {
                 }
                 let count = self.selected.len();
                 self.pending_delete = true;
-                ScreenAction::Push(Screen::Confirm(ConfirmScreen::new(
+                ScreenAction::Push(Box::new(ConfirmScreen::new(
                     "Confirm Deletion".to_string(),
                     format!("Delete {} worktree(s)?", count),
                 )))
