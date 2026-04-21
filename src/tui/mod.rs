@@ -2,20 +2,16 @@
 
 pub mod theme;
 pub mod session_list;
-pub mod action_menu;
 pub mod confirm;
 pub mod help;
 pub mod new_session;
-pub mod review;
 pub mod adopt_session;
 pub mod rename;
 pub mod edit_branch;
-pub mod new_tab;
 pub mod history;
 pub mod cleanup;
 pub mod settings;
 
-use std::sync::mpsc;
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
@@ -23,7 +19,6 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Clear};
 
 use crate::manager::Manager;
-use crate::models::*;
 use crate::switch::{self, SwitchAction};
 
 #[allow(dead_code)]
@@ -41,12 +36,6 @@ pub enum ScreenAction {
     Quit,
 }
 
-#[allow(dead_code)]
-pub enum BackgroundResult {
-    StaleWorktrees(Vec<Worktree>),
-    CheckoutComplete(Result<(Session, String), String>),
-}
-
 pub trait ScreenBehavior {
     fn render(&self, f: &mut Frame, area: Rect, manager: &Manager);
     fn handle_event(&mut self, event: &Event, manager: &mut Manager) -> ScreenAction;
@@ -55,28 +44,20 @@ pub trait ScreenBehavior {
         ScreenAction::None
     }
     fn on_resume(&mut self, _manager: &mut Manager) {}
-    fn on_background_result(&mut self, _result: BackgroundResult, _manager: &mut Manager) -> ScreenAction {
-        ScreenAction::None
-    }
     fn is_modal(&self) -> bool {
         false
     }
 }
 
-// All screen types
-#[allow(dead_code)]
 pub enum Screen {
     SessionList(session_list::SessionListScreen),
-    ActionMenu(action_menu::ActionMenuScreen),
     Confirm(confirm::ConfirmScreen),
     Help(help::HelpScreen),
     NewSession(new_session::NewSessionScreen),
-    Review(review::ReviewScreen),
     AdoptSession(adopt_session::AdoptSessionScreen),
     RenameSession(rename::RenameSessionScreen),
     RenameWindow(rename::RenameWindowScreen),
     EditBranch(edit_branch::EditBranchScreen),
-    NewTab(new_tab::NewTabScreen),
     History(history::HistoryScreen),
     Cleanup(cleanup::CleanupScreen),
     Settings(settings::SettingsScreen),
@@ -86,16 +67,13 @@ impl Screen {
     fn behavior(&self) -> &dyn ScreenBehavior {
         match self {
             Screen::SessionList(s) => s,
-            Screen::ActionMenu(s) => s,
             Screen::Confirm(s) => s,
             Screen::Help(s) => s,
             Screen::NewSession(s) => s,
-            Screen::Review(s) => s,
             Screen::AdoptSession(s) => s,
             Screen::RenameSession(s) => s,
             Screen::RenameWindow(s) => s,
             Screen::EditBranch(s) => s,
-            Screen::NewTab(s) => s,
             Screen::History(s) => s,
             Screen::Cleanup(s) => s,
             Screen::Settings(s) => s,
@@ -105,16 +83,13 @@ impl Screen {
     fn behavior_mut(&mut self) -> &mut dyn ScreenBehavior {
         match self {
             Screen::SessionList(s) => s,
-            Screen::ActionMenu(s) => s,
             Screen::Confirm(s) => s,
             Screen::Help(s) => s,
             Screen::NewSession(s) => s,
-            Screen::Review(s) => s,
             Screen::AdoptSession(s) => s,
             Screen::RenameSession(s) => s,
             Screen::RenameWindow(s) => s,
             Screen::EditBranch(s) => s,
-            Screen::NewTab(s) => s,
             Screen::History(s) => s,
             Screen::Cleanup(s) => s,
             Screen::Settings(s) => s,
@@ -126,26 +101,15 @@ pub struct App {
     pub manager: Manager,
     screen_stack: Vec<Screen>,
     should_quit: bool,
-    bg_rx: mpsc::Receiver<BackgroundResult>,
-    #[allow(dead_code)]
-    pub bg_tx: mpsc::Sender<BackgroundResult>,
 }
 
 impl App {
     pub fn new(manager: Manager) -> Self {
-        let (bg_tx, bg_rx) = mpsc::channel();
         Self {
             manager,
             screen_stack: Vec::new(),
             should_quit: false,
-            bg_rx,
-            bg_tx,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn push(&mut self, screen: Screen) {
-        self.screen_stack.push(screen);
     }
 
     pub fn run(&mut self, terminal: &mut ratatui::DefaultTerminal) {
@@ -169,14 +133,6 @@ impl App {
             if let Some(top) = self.screen_stack.last_mut() {
                 let action = top.behavior_mut().tick(&mut self.manager);
                 self.process_action(action);
-            }
-
-            // Check for background results
-            while let Ok(result) = self.bg_rx.try_recv() {
-                if let Some(top) = self.screen_stack.last_mut() {
-                    let action = top.behavior_mut().on_background_result(result, &mut self.manager);
-                    self.process_action(action);
-                }
             }
 
             // Poll for input

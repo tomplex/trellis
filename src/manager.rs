@@ -454,30 +454,6 @@ impl Manager {
         Ok(())
     }
 
-    /// Return worktrees whose branch is merged or whose remote branch is deleted.
-    #[allow(dead_code)]
-    pub fn get_stale_worktrees(&self) -> Vec<Worktree> {
-        let all_worktrees = db::get_worktrees(&self.conn);
-        let mut stale = Vec::new();
-
-        for wt in all_worktrees {
-            let repo = match self.get_repo_by_id(wt.repo_id) {
-                Some(r) => r,
-                None => continue,
-            };
-
-            let merged = git::is_branch_merged(&repo.path, &wt.branch, &repo.default_branch)
-                .unwrap_or(false);
-
-            let has_remote = git::has_remote_branch(&repo.path, &wt.branch).unwrap_or(true);
-
-            if merged || !has_remote {
-                stale.push(wt);
-            }
-        }
-        stale
-    }
-
     /// Return DB sessions enriched with live tmux state, plus unmanaged live sessions.
     pub fn list_sessions(&self) -> Vec<SessionInfo> {
         let db_sessions = db::get_sessions(&self.conn);

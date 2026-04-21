@@ -218,7 +218,7 @@ impl SessionListScreen {
     }
 
     fn is_child_row(key: &str) -> bool {
-        key.starts_with("wt:") || key.starts_with("win:")
+        key.starts_with("win:")
     }
 
     // ------------------------------------------------------------------
@@ -913,30 +913,7 @@ impl SessionListScreen {
             Some(k) => k,
             None => return ScreenAction::None,
         };
-        let row_key = self.current_row_key();
         let session = self.current_session().cloned();
-
-        if key == "rename-tab" {
-            if let Some(rk) = &row_key {
-                if rk.starts_with("win:") {
-                    let parts: Vec<&str> = rk.splitn(3, ':').collect();
-                    if parts.len() == 3 {
-                        let session_name = parts[1].to_string();
-                        let window_index: i64 = parts[2].parse().unwrap_or(0);
-                        let windows = tmux::list_windows(&session_name);
-                        if let Some(win) = windows.iter().find(|w| w.index == window_index) {
-                            let screen = super::rename::RenameWindowScreen::new(
-                                session_name,
-                                window_index,
-                                win.name.clone(),
-                            );
-                            return ScreenAction::Push(Screen::RenameWindow(screen));
-                        }
-                    }
-                }
-            }
-            return ScreenAction::None;
-        }
 
         let session = match session {
             Some(s) => s,
@@ -944,18 +921,6 @@ impl SessionListScreen {
         };
 
         match key.as_str() {
-            "rename" if session.managed => {
-                if let Some(id) = session.id {
-                    let screen = super::rename::RenameSessionScreen::new(
-                        manager,
-                        id,
-                        session.name.clone(),
-                    );
-                    ScreenAction::Push(Screen::RenameSession(screen))
-                } else {
-                    ScreenAction::None
-                }
-            }
             "branch" if session.managed => {
                 if let Some(id) = session.id {
                     let screen = super::edit_branch::EditBranchScreen::new(

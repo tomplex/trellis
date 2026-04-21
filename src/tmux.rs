@@ -100,6 +100,21 @@ pub fn switch_client(target: &str) -> Result<(), TmuxError> {
     Ok(())
 }
 
+pub fn attach_session(target: &str) -> Result<(), TmuxError> {
+    let status = Command::new("tmux")
+        .args(["attach-session", "-t", target])
+        .status()
+        .map_err(|e| TmuxError(format!("Failed to attach to '{}': {}", target, e)))?;
+    if !status.success() {
+        return Err(TmuxError(format!("Failed to attach to '{}'", target)));
+    }
+    Ok(())
+}
+
+pub fn inside_tmux() -> bool {
+    std::env::var("TMUX").is_ok()
+}
+
 pub fn new_window(session: &str, name: &str, start_dir: Option<&str>) -> Result<(), TmuxError> {
     let mut args = vec!["new-window", "-t", session, "-n", name];
     if let Some(dir) = start_dir {
@@ -262,20 +277,6 @@ pub fn capture_pane(target: &str, lines: i64) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub fn get_pane_pid(target: &str) -> Option<String> {
-    let output = run(&["display-message", "-t", target, "-p", "#{pane_pid}"]);
-    if output.status.success() {
-        let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if pid.is_empty() {
-            None
-        } else {
-            Some(pid)
-        }
-    } else {
-        None
-    }
-}
 
 pub fn kill_session(name: &str) -> Result<(), TmuxError> {
     let output = run(&["kill-session", "-t", name]);
