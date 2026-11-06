@@ -11,6 +11,7 @@ use crate::switch::{self, SwitchAction};
 use crate::tmux;
 use crate::utils::truncate_end;
 
+use super::job::{Job, JobMsg};
 use super::theme;
 use super::{ScreenAction, ScreenBehavior};
 
@@ -53,6 +54,10 @@ pub struct HistoryScreen {
     sort_descending: bool,
 
     table_state: TableState,
+
+    /// Parsing the index reads the whole file and recompiles its regexes, which
+    /// is slow enough on a long-lived index to stall the screen opening.
+    load_job: Option<Job<Vec<Conversation>>>,
 }
 
 impl HistoryScreen {
@@ -61,28 +66,51 @@ impl HistoryScreen {
         scope_paths: Option<Vec<String>>,
         scope_label: Option<String>,
     ) -> Self {
-        let all_entries = conversation_index::parse_index(None);
         let scoped = scope_paths.is_some();
-        let scoped_entries = match &scope_paths {
-            Some(paths) => conversation_index::filter_by_paths(&all_entries, paths),
-            None => Vec::new(),
-        };
+        let load_job = Job::spawn("Loading history", None, |tx| {
+            let _ = tx.send(JobMsg::Item(conversation_index::parse_index(None)));
+            let _ = tx.send(JobMsg::Done);
+        });
 
         let mut screen = Self {
             scope_paths,
             scope_label,
             scoped,
-            all_entries,
-            scoped_entries,
+            all_entries: Vec::new(),
+            scoped_entries: Vec::new(),
             displayed: Vec::new(),
             filter: String::new(),
             filter_active: false,
             sort_by: SortMode::Date,
             sort_descending: true,
             table_state: TableState::default(),
+            load_job: Some(load_job),
         };
         screen.rebuild();
         screen
+    }
+
+    /// Take the parsed index once the worker delivers it.
+    fn apply_load_results(&mut self) {
+        let Some(job) = self.load_job.as_mut() else { return };
+        let entries = job.drain().pop();
+        let finished = job.finished();
+
+        if let Some(entries) = entries {
+            self.scoped_entries = match &self.scope_paths {
+                Some(paths) => conversation_index::filter_by_paths(&entries, paths),
+                None => Vec::new(),
+            };
+            self.all_entries = entries;
+            self.rebuild();
+        }
+        if finished {
+            self.load_job = None;
+        }
+    }
+
+    fn loading(&self) -> bool {
+        self.load_job.is_some()
     }
 
     fn rebuild(&mut self) {
@@ -325,14 +353,22 @@ impl HistoryScreen {
 }
 
 impl ScreenBehavior for HistoryScreen {
+    fn tick(&mut self, _manager: &mut Manager) -> ScreenAction {
+        self.apply_load_results();
+        ScreenAction::None
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, _manager: &Manager) {
         let has_filter = self.filter_active || !self.filter.is_empty();
         let filter_height = if has_filter { 1 } else { 0 };
+
+        let job_height = if self.loading() { 1 } else { 0 };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // title
+                Constraint::Length(job_height), // background work indicator
                 Constraint::Length(filter_height),
                 Constraint::Min(0), // table
                 Constraint::Length(1), // footer
@@ -344,6 +380,13 @@ impl ScreenBehavior for HistoryScreen {
         let title_widget = Paragraph::new(title).style(Style::default().bg(theme::HEADER_BG));
         f.render_widget(title_widget, chunks[0]);
 
+        // Background work indicator
+        if let Some(ref job) = self.load_job {
+            let indicator = Paragraph::new(job.indicator_line())
+                .style(Style::default().bg(theme::HEADER_BG));
+            f.render_widget(indicator, chunks[1]);
+        }
+
         // Filter bar
         if has_filter {
             let filter_text = format!("/{}", self.filter);
@@ -353,7 +396,7 @@ impl ScreenBehavior for HistoryScreen {
                 Style::default().fg(theme::TEXT_DIM).bg(theme::HEADER_BG)
             };
             let filter_widget = Paragraph::new(filter_text).style(filter_style);
-            f.render_widget(filter_widget, chunks[1]);
+            f.render_widget(filter_widget, chunks[2]);
         }
 
         // Table
@@ -403,11 +446,11 @@ impl ScreenBehavior for HistoryScreen {
             .block(Block::default().style(theme::style_default()));
 
         let mut state = self.table_state.clone();
-        f.render_stateful_widget(table, chunks[2], &mut state);
+        f.render_stateful_widget(table, chunks[3], &mut state);
 
         // Footer
         let footer = self.render_footer();
-        f.render_widget(footer, chunks[3]);
+        f.render_widget(footer, chunks[4]);
     }
 
     fn handle_event(&mut self, event: &Event, manager: &mut Manager) -> ScreenAction {

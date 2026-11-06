@@ -1,6 +1,7 @@
 // trellis/src/tui/mod.rs
 
 pub mod theme;
+pub mod job;
 pub mod session_list;
 pub mod confirm;
 pub mod help;

@@ -1,6 +1,7 @@
 // trellis/src/tui/session_list.rs
 
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use md5::{Md5, Digest};
@@ -15,6 +16,7 @@ use crate::switch::SwitchAction;
 use crate::tmux::{self, TmuxWindow};
 use crate::utils::truncate_end;
 
+use super::job::{Job, JobMsg};
 use super::theme;
 use super::{ActionResult, ScreenAction, ScreenBehavior};
 
@@ -105,6 +107,60 @@ fn assign_repo_colors(repo_names: &HashSet<String>) -> HashMap<String, Color> {
 // Auto-rename helper
 // --------------------------------------------------------------------------
 
+/// Stable identity for a session row — the DB id when managed, the name
+/// otherwise. Shared by row building and the poll, which must agree on it.
+fn session_row_key(session: &SessionInfo) -> String {
+    match session.id {
+        Some(id) => id.to_string(),
+        None => format!("unmanaged:{}", session.name),
+    }
+}
+
+/// Translate expanded *row keys* into the tmux *session names* the poll needs.
+/// These are not the same string — an unmanaged session's row key is
+/// "unmanaged:<name>" — so the poll must go through here or it silently
+/// captures no panes.
+fn expanded_session_names(
+    sessions: &[SessionInfo],
+    expanded_keys: &HashSet<String>,
+) -> HashSet<String> {
+    sessions
+        .iter()
+        .filter(|s| expanded_keys.contains(&session_row_key(s)))
+        .map(|s| s.name.clone())
+        .collect()
+}
+
+/// Every tmux call the session list needs, in one place so it can run off the
+/// event loop. `expanded_names` limits pane capture to sessions whose windows
+/// are actually on screen. Also performs the claude-window auto-rename, since
+/// that reads conversation files and shells out to `tmux rename-window`.
+fn gather_snapshot(expanded_names: &HashSet<String>) -> TmuxSnapshot {
+    let live = tmux::list_sessions();
+    let mut windows = tmux::list_all_windows();
+    let mut pane_states = HashMap::new();
+
+    for session in &live {
+        if !expanded_names.contains(&session.name) {
+            continue;
+        }
+        let Some(wins) = windows.get_mut(&session.name) else { continue };
+        for win in wins.iter_mut() {
+            if win.command.is_empty() || !looks_like_claude_command(&win.command) {
+                continue;
+            }
+            if looks_like_claude_command(&win.name) {
+                try_rename_claude_window(&session.name, win);
+            }
+            let target = format!("{}:{}", session.name, win.index);
+            let state = claude_pane::classify_pane(&tmux::capture_pane(&target, 8));
+            pane_states.insert(target, state);
+        }
+    }
+
+    TmuxSnapshot { live, windows, pane_states }
+}
+
 fn try_rename_claude_window(session_name: &str, win: &mut TmuxWindow) {
     let session_id = match claude_pane::get_session_id(&win.pane_pid) {
         Some(id) => id,
@@ -166,6 +222,20 @@ enum InlineMode {
     ActionMenu { items: Vec<(String, String)>, cursor: usize },
 }
 
+/// Everything the session list needs from tmux. Gathered on a worker thread —
+/// it costs two process spawns plus one `capture-pane` per expanded Claude
+/// window, which used to run on the event loop for every keystroke.
+#[derive(Default)]
+struct TmuxSnapshot {
+    live: Vec<tmux::TmuxSession>,
+    windows: HashMap<String, Vec<TmuxWindow>>,
+    /// "<session>:<window index>" -> classify_pane result.
+    pane_states: HashMap<String, &'static str>,
+}
+
+/// How often the snapshot is refreshed while the screen is idle.
+const POLL_INTERVAL: Duration = Duration::from_millis(1000);
+
 pub struct SessionListScreen {
     sessions: Vec<SessionInfo>,
     repos: HashMap<i64, Repo>,
@@ -177,6 +247,12 @@ pub struct SessionListScreen {
     table_state: TableState,
     inline_mode: InlineMode,
     status_message: Option<String>,
+    snapshot: TmuxSnapshot,
+    poll_job: Option<Job<TmuxSnapshot>>,
+    last_poll: Instant,
+    /// gh/git network work for a PR review, plus the repo it belongs to.
+    review_job: Option<Job<Result<String, String>>>,
+    review_repo: Option<String>,
 }
 
 impl SessionListScreen {
@@ -192,9 +268,97 @@ impl SessionListScreen {
             table_state: TableState::default(),
             inline_mode: InlineMode::None,
             status_message: None,
+            // First paint gathers inline so the list is never briefly empty;
+            // every refresh after this one comes from the poll job.
+            snapshot: gather_snapshot(&HashSet::new()),
+            poll_job: None,
+            last_poll: Instant::now(),
+            review_job: None,
+            review_repo: None,
         };
         screen.refresh(manager);
         screen
+    }
+
+    /// Re-gather tmux state on a worker. No-op if one is already in flight.
+    fn spawn_poll(&mut self) {
+        if self.poll_job.is_some() {
+            return;
+        }
+        self.last_poll = Instant::now();
+        let expanded_names = expanded_session_names(&self.sessions, &self.expanded);
+        self.poll_job = Some(Job::spawn("Refreshing", None, move |tx| {
+            let _ = tx.send(JobMsg::Item(gather_snapshot(&expanded_names)));
+            let _ = tx.send(JobMsg::Done);
+        }));
+    }
+
+    fn reviewing(&self) -> bool {
+        self.review_job.is_some()
+    }
+
+    /// Finish a PR review once the fetch lands. Runs the db/worktree half here
+    /// on the main thread, then hands back the switch that ends the app.
+    fn apply_review_results(&mut self, manager: &Manager) -> ScreenAction {
+        let Some(job) = self.review_job.as_mut() else {
+            return ScreenAction::None;
+        };
+        let resolved = job.drain().pop();
+        let finished = job.finished();
+
+        let Some(resolved) = resolved else {
+            if finished {
+                // Worker died without a result.
+                self.review_job = None;
+                self.review_repo = None;
+                self.status_message = Some("Review fetch failed.".to_string());
+            }
+            return ScreenAction::None;
+        };
+
+        self.review_job = None;
+        let repo_path = self.review_repo.take().unwrap_or_default();
+
+        let branch = match resolved {
+            Ok(b) => b,
+            Err(e) => {
+                self.status_message = Some(format!("Error: {}", e));
+                return ScreenAction::None;
+            }
+        };
+
+        match manager.checkout_and_review(&repo_path, &branch) {
+            Ok((session, _worktree_path)) => {
+                ScreenAction::Switch(SwitchAction::Session { target: session.name })
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Error: {}", e));
+                ScreenAction::None
+            }
+        }
+    }
+
+    /// Swap in a finished snapshot and rebuild, then re-arm the interval.
+    fn poll_results(&mut self, manager: &Manager) {
+        let Some(job) = self.poll_job.as_mut() else {
+            if self.last_poll.elapsed() >= POLL_INTERVAL {
+                self.spawn_poll();
+            }
+            return;
+        };
+        // End the borrow on the job before touching the rest of self.
+        let fresh = job.drain().pop();
+        let finished = job.finished();
+
+        if let Some(snapshot) = fresh {
+            self.snapshot = snapshot;
+            let restore = self.current_row_key();
+            self.refresh_with_restore(manager, restore.as_deref());
+        }
+        if finished {
+            self.poll_job = None;
+            self.last_poll = Instant::now();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -211,8 +375,7 @@ impl SessionListScreen {
         }).collect();
 
         self.sessions = self.sorted_sessions(manager);
-        let all_windows = tmux::list_all_windows();
-        self.rows = self.build_rows(&all_windows, manager);
+        self.rows = self.build_rows(manager);
 
         // Restore cursor position
         if let Some(key) = restore_key {
@@ -245,7 +408,7 @@ impl SessionListScreen {
     // ------------------------------------------------------------------
 
     fn sorted_sessions(&self, manager: &Manager) -> Vec<SessionInfo> {
-        let mut sessions = manager.list_sessions();
+        let mut sessions = manager.list_sessions_with(&self.snapshot.live);
 
         if !self.filter.is_empty() {
             let mut scored: Vec<(SessionInfo, i32)> = Vec::new();
@@ -297,7 +460,7 @@ impl SessionListScreen {
     // Row building
     // ------------------------------------------------------------------
 
-    fn build_rows(&self, all_windows: &HashMap<String, Vec<TmuxWindow>>, manager: &Manager) -> Vec<RowData> {
+    fn build_rows(&self, manager: &Manager) -> Vec<RowData> {
         let all_repo_names: HashSet<String> = self.sessions.iter()
             .filter_map(|s| s.repo_id.and_then(|id| self.repos.get(&id)).map(|r| r.name.clone()))
             .collect();
@@ -314,11 +477,7 @@ impl SessionListScreen {
             let windows_str = session.windows.map(|w| w.to_string()).unwrap_or_else(|| "-".to_string());
             let color = repo_colors.get(repo_name).copied().unwrap_or(theme::TEXT_DIM);
 
-            let row_key = if let Some(id) = session.id {
-                id.to_string()
-            } else {
-                format!("unmanaged:{}", session.name)
-            };
+            let row_key = session_row_key(session);
 
             let expanded = self.expanded.contains(&row_key);
             let can_expand = session.live;
@@ -400,7 +559,7 @@ impl SessionListScreen {
 
             // Expanded child rows
             if expanded && session.live {
-                let mut tmux_windows = all_windows.get(&session.name).cloned().unwrap_or_default();
+                let tmux_windows = self.snapshot.windows.get(&session.name).cloned().unwrap_or_default();
 
                 // Build worktree lookup
                 let mut wt_by_path: HashMap<String, String> = HashMap::new();
@@ -413,7 +572,7 @@ impl SessionListScreen {
                 }
 
                 let win_count = tmux_windows.len();
-                for (i, win) in tmux_windows.iter_mut().enumerate() {
+                for (i, win) in tmux_windows.iter().enumerate() {
                     let is_last = i == win_count - 1;
                     let prefix = if is_last { "└" } else { "├" };
                     let wt_branch = wt_by_path.get(&win.path).or_else(|| {
@@ -423,19 +582,10 @@ impl SessionListScreen {
                     });
                     let is_claude = !win.command.is_empty() && looks_like_claude_command(&win.command);
 
-                    // Auto-rename version-numbered claude windows
-                    if is_claude && looks_like_claude_command(&win.name) {
-                        try_rename_claude_window(&session.name, win);
-                    }
-
                     let mut col_repo_child = Vec::new();
                     if is_claude {
-                        let pane_text = tmux::capture_pane(
-                            &format!("{}:{}", session.name, win.index),
-                            8,
-                        );
-                        let state = claude_pane::classify_pane(&pane_text);
-                        match state {
+                        let key = format!("{}:{}", session.name, win.index);
+                        match self.snapshot.pane_states.get(key.as_str()).copied().unwrap_or("") {
                             "working" => {
                                 col_repo_child.push(StyledSegment::new("✦ working…", Style::default().fg(theme::ORANGE)));
                             }
@@ -603,6 +753,9 @@ impl SessionListScreen {
         if !self.expanded.contains(&key) {
             self.expanded.insert(key.clone());
             self.refresh_with_restore(manager, Some(&key));
+            // The poll only captures panes for sessions that were already
+            // expanded, so this one has no claude state yet.
+            self.spawn_poll();
         }
     }
 
@@ -811,6 +964,10 @@ impl SessionListScreen {
     }
 
     fn action_review(&mut self, manager: &Manager) -> ScreenAction {
+        if self.reviewing() {
+            self.status_message = Some("A review fetch is already running.".to_string());
+            return ScreenAction::None;
+        }
         let mut repos = manager.get_repos();
         if repos.is_empty() {
             self.status_message = Some("No repos configured.".to_string());
@@ -1167,7 +1324,7 @@ impl SessionListScreen {
         self.refresh(manager);
     }
 
-    fn handle_review_key(&mut self, code: KeyCode, modifiers: crossterm::event::KeyModifiers, manager: &mut Manager) -> ScreenAction {
+    fn handle_review_key(&mut self, code: KeyCode, modifiers: crossterm::event::KeyModifiers, _manager: &mut Manager) -> ScreenAction {
         match code {
             KeyCode::Tab => {
                 if let InlineMode::Review { repo_index, repos, .. } = &mut self.inline_mode {
@@ -1194,17 +1351,20 @@ impl SessionListScreen {
                 }
                 self.inline_mode = InlineMode::None;
 
-                match manager.checkout_and_review(&repo.path, &input) {
-                    Ok((session, _worktree_path)) => {
-                        ScreenAction::Switch(SwitchAction::Session {
-                            target: session.name,
-                        })
-                    }
-                    Err(e) => {
-                        self.status_message = Some(format!("Error: {}", e));
-                        ScreenAction::None
-                    }
-                }
+                // `gh pr view` plus `git fetch` is two network round trips; the
+                // local half runs on the main thread once this lands.
+                let repo_path = repo.path.clone();
+                self.review_repo = Some(repo_path.clone());
+                self.review_job = Some(Job::spawn(
+                    format!("Fetching {}", input),
+                    None,
+                    move |tx| {
+                        let resolved = Manager::resolve_review_branch(&repo_path, &input);
+                        let _ = tx.send(JobMsg::Item(resolved));
+                        let _ = tx.send(JobMsg::Done);
+                    },
+                ));
+                ScreenAction::None
             }
             KeyCode::Esc => {
                 self.inline_mode = InlineMode::None;
@@ -1324,13 +1484,30 @@ impl SessionListScreen {
 }
 
 impl ScreenBehavior for SessionListScreen {
+    fn tick(&mut self, manager: &mut Manager) -> ScreenAction {
+        let action = self.apply_review_results(manager);
+        if !matches!(action, ScreenAction::None) {
+            return action;
+        }
+        self.poll_results(manager);
+        // Run deferred slow work the frame after the user confirmed it. Draw
+        // happens before tick in the main loop, so the "Working…" overlay is
+        // already on-screen by the time we block here.
+        if matches!(self.inline_mode, InlineMode::Working { .. }) {
+            self.run_pending_work(manager);
+        }
+        ScreenAction::None
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, _manager: &Manager) {
         // Layout: optional filter at top, table in middle, footer at bottom
         let has_filter = self.filter_active || !self.filter.is_empty();
         let filter_height = if has_filter { 1 } else { 0 };
 
         let status_height = match &self.inline_mode {
-            InlineMode::None => if self.status_message.is_some() { 1 } else { 0 },
+            InlineMode::None => {
+                if self.status_message.is_some() || self.reviewing() { 1 } else { 0 }
+            }
             InlineMode::Working { .. } => 0,
             _ => 1,
         };
@@ -1355,6 +1532,12 @@ impl ScreenBehavior for SessionListScreen {
             };
             let filter_widget = Paragraph::new(filter_text).style(filter_style);
             f.render_widget(filter_widget, chunks[0]);
+        }
+
+        // Background work indicator (PR review fetch)
+        if let Some(ref job) = self.review_job {
+            let indicator = Paragraph::new(job.indicator_line()).style(Style::default().bg(theme::BG));
+            f.render_widget(indicator, chunks[2]);
         }
 
         // Build table rows
@@ -1702,17 +1885,71 @@ impl ScreenBehavior for SessionListScreen {
         ScreenAction::None
     }
 
-    fn tick(&mut self, manager: &mut Manager) -> ScreenAction {
-        // Run deferred slow work the frame after the user confirmed it. Draw
-        // happens before tick in the main loop, so the "Working…" overlay is
-        // already on-screen by the time we block here.
-        if matches!(self.inline_mode, InlineMode::Working { .. }) {
-            self.run_pending_work(manager);
+    fn on_resume(&mut self, manager: &mut Manager) {
+        // Coming back from another screen, tmux state may have moved under us —
+        // rebuild from what we have now, and re-poll immediately rather than
+        // waiting out the interval.
+        self.refresh(manager);
+        self.spawn_poll();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: Option<i64>, name: &str) -> SessionInfo {
+        SessionInfo {
+            id,
+            name: name.to_string(),
+            repo_id: None,
+            base_branch: None,
+            created_at: None,
+            last_selected_at: None,
+            windows: Some(1),
+            attached: false,
+            live: true,
+            managed: id.is_some(),
         }
-        ScreenAction::None
     }
 
-    fn on_resume(&mut self, manager: &mut Manager) {
-        self.refresh(manager);
+    #[test]
+    fn expanded_unmanaged_session_resolves_to_its_tmux_name() {
+        let sessions = vec![session(None, "scratch")];
+        // What handle_expand stores for an unmanaged row.
+        let keys: HashSet<String> = ["unmanaged:scratch".to_string()].into_iter().collect();
+
+        let names = expanded_session_names(&sessions, &keys);
+
+        // Passing the row key straight through would yield "unmanaged:scratch",
+        // which matches no tmux session, so no panes would ever be captured.
+        assert_eq!(names, ["scratch".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn expanded_managed_session_resolves_to_its_tmux_name() {
+        let sessions = vec![session(Some(7), "feature-work")];
+        let keys: HashSet<String> = ["7".to_string()].into_iter().collect();
+
+        let names = expanded_session_names(&sessions, &keys);
+
+        assert_eq!(names, ["feature-work".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn collapsed_sessions_are_not_polled_for_panes() {
+        let sessions = vec![session(Some(1), "a"), session(None, "b")];
+
+        assert!(expanded_session_names(&sessions, &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn row_key_matches_what_the_poll_looks_up() {
+        // build_rows and the poll must agree; this is the contract between them.
+        for s in [session(Some(3), "managed"), session(None, "loose")] {
+            let keys: HashSet<String> = [session_row_key(&s)].into_iter().collect();
+            let names = expanded_session_names(std::slice::from_ref(&s), &keys);
+            assert_eq!(names, [s.name.clone()].into_iter().collect());
+        }
     }
 }
