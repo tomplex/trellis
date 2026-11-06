@@ -1,15 +1,16 @@
 // trellis/src/tui/mod.rs
 
 pub mod theme;
+pub mod job;
 pub mod session_list;
 pub mod confirm;
 pub mod help;
 pub mod new_session;
 pub mod adopt_session;
 pub mod adopt_worktree;
+pub mod path_complete;
 pub mod rename;
 pub mod edit_branch;
-pub mod history;
 pub mod cleanup;
 pub mod settings;
 pub mod working;

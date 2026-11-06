@@ -16,6 +16,8 @@ pub struct Session {
     pub base_branch: String,
     pub created_at: String,
     pub last_selected_at: Option<String>,
+    /// Agent command chosen at creation; `None` falls back to the `agent_cmd` setting.
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,24 +44,4 @@ pub struct SessionInfo {
     pub attached: bool,
     pub live: bool,
     pub managed: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct Conversation {
-    pub date: String,
-    pub session_id: String,
-    pub project: String,
-    pub branch: String,
-    pub intents: Vec<String>,
-}
-
-impl Conversation {
-    pub fn summary(&self) -> &str {
-        for intent in &self.intents {
-            if !intent.starts_with("[Request interrupted") {
-                return intent;
-            }
-        }
-        self.intents.first().map(|s| s.as_str()).unwrap_or("")
-    }
 }

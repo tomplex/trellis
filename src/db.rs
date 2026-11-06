@@ -31,6 +31,11 @@ pub fn init_db(db_path: &Path) -> Connection {
         ],
     )
     .unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES (?1, ?2)",
+        params!["agent_cmd", crate::manager::DEFAULT_AGENT_CMD],
+    )
+    .unwrap();
 
     conn
 }
@@ -83,6 +88,17 @@ pub fn init_schema(conn: &Connection) {
         .any(|name| name.as_deref() == Ok("last_selected_at"));
     if !has_col {
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN last_selected_at TEXT;")
+            .unwrap();
+    }
+
+    let has_agent: bool = conn
+        .prepare("PRAGMA table_info(sessions)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .any(|name| name.as_deref() == Ok("agent"));
+    if !has_agent {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent TEXT;")
             .unwrap();
     }
 }
@@ -151,12 +167,13 @@ pub fn get_repos(conn: &Connection) -> Vec<Repo> {
 
 pub fn add_session(conn: &Connection, session: &Session) -> Session {
     conn.execute(
-        "INSERT INTO sessions (name, repo_id, base_branch, created_at) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO sessions (name, repo_id, base_branch, created_at, agent) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             session.name,
             session.repo_id,
             session.base_branch,
-            session.created_at
+            session.created_at,
+            session.agent
         ],
     )
     .unwrap();
@@ -168,7 +185,7 @@ pub fn add_session(conn: &Connection, session: &Session) -> Session {
 
 pub fn get_sessions(conn: &Connection) -> Vec<Session> {
     let mut stmt = conn
-        .prepare("SELECT id, name, repo_id, base_branch, created_at, last_selected_at FROM sessions")
+        .prepare("SELECT id, name, repo_id, base_branch, created_at, last_selected_at, agent FROM sessions")
         .unwrap();
     stmt.query_map([], |row| {
         Ok(Session {
@@ -178,6 +195,7 @@ pub fn get_sessions(conn: &Connection) -> Vec<Session> {
             base_branch: row.get(3)?,
             created_at: row.get(4)?,
             last_selected_at: row.get(5)?,
+            agent: row.get(6)?,
         })
     })
     .unwrap()
@@ -187,7 +205,7 @@ pub fn get_sessions(conn: &Connection) -> Vec<Session> {
 
 pub fn get_session_by_name(conn: &Connection, name: &str) -> Option<Session> {
     conn.query_row(
-        "SELECT id, name, repo_id, base_branch, created_at, last_selected_at FROM sessions WHERE name = ?1",
+        "SELECT id, name, repo_id, base_branch, created_at, last_selected_at, agent FROM sessions WHERE name = ?1",
         params![name],
         |row| {
             Ok(Session {
@@ -197,6 +215,7 @@ pub fn get_session_by_name(conn: &Connection, name: &str) -> Option<Session> {
                 base_branch: row.get(3)?,
                 created_at: row.get(4)?,
                 last_selected_at: row.get(5)?,
+                agent: row.get(6)?,
             })
         },
     )
@@ -318,7 +337,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         conn.execute_batch(
             "CREATE TABLE repos (id INTEGER PRIMARY KEY, path TEXT NOT NULL, name TEXT NOT NULL, default_branch TEXT NOT NULL);
-             CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT NOT NULL, repo_id INTEGER NOT NULL, base_branch TEXT NOT NULL, created_at TEXT NOT NULL, last_selected_at TEXT, FOREIGN KEY (repo_id) REFERENCES repos(id));
+             CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT NOT NULL, repo_id INTEGER NOT NULL, base_branch TEXT NOT NULL, created_at TEXT NOT NULL, last_selected_at TEXT, agent TEXT, FOREIGN KEY (repo_id) REFERENCES repos(id));
              CREATE TABLE worktrees (id INTEGER PRIMARY KEY, session_id INTEGER, repo_id INTEGER NOT NULL, path TEXT NOT NULL, branch TEXT NOT NULL, tmux_window INTEGER, created_at TEXT NOT NULL, FOREIGN KEY (session_id) REFERENCES sessions(id), FOREIGN KEY (repo_id) REFERENCES repos(id));
              CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         ).unwrap();
@@ -360,6 +379,7 @@ mod tests {
                 base_branch: "main".into(),
                 created_at: "2026-01-01T00:00:00".into(),
                 last_selected_at: None,
+                agent: None,
             },
         );
         assert!(session.id.is_some());
@@ -381,6 +401,7 @@ mod tests {
                 base_branch: "main".into(),
                 created_at: "2026-01-01T00:00:00".into(),
                 last_selected_at: None,
+                agent: None,
             },
         );
         assert!(get_session_by_name(&conn, "findme").is_some());
@@ -400,6 +421,7 @@ mod tests {
                 base_branch: "main".into(),
                 created_at: "2026-01-01T00:00:00".into(),
                 last_selected_at: None,
+                agent: None,
             },
         );
         assert!(session.last_selected_at.is_none());
@@ -421,6 +443,7 @@ mod tests {
                 base_branch: "main".into(),
                 created_at: "2026-01-01T00:00:00".into(),
                 last_selected_at: None,
+                agent: None,
             },
         );
         delete_session(&conn, session.id.unwrap());
@@ -440,6 +463,7 @@ mod tests {
                 base_branch: "main".into(),
                 created_at: "2026-01-01T00:00:00".into(),
                 last_selected_at: None,
+                agent: None,
             },
         );
         let wt = add_worktree(
@@ -484,5 +508,34 @@ mod tests {
         assert!(get_config(&conn, "repos_dir").is_some());
         assert!(get_config(&conn, "worktrees_dir").is_some());
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn session_agent_round_trips_and_old_dbs_are_migrated() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE repos (id INTEGER PRIMARY KEY, path TEXT NOT NULL, name TEXT NOT NULL, default_branch TEXT NOT NULL);
+             CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT NOT NULL, repo_id INTEGER NOT NULL, base_branch TEXT NOT NULL, created_at TEXT NOT NULL, last_selected_at TEXT, FOREIGN KEY (repo_id) REFERENCES repos(id));
+             INSERT INTO repos VALUES (1, '/r', 'r', 'main');
+             INSERT INTO sessions VALUES (1, 'old', 1, 'main', 't', NULL);",
+        )
+        .unwrap();
+        init_schema(&conn);
+
+        assert_eq!(get_session_by_name(&conn, "old").unwrap().agent, None);
+        add_session(
+            &conn,
+            &Session {
+                id: None,
+                name: "new".into(),
+                repo_id: 1,
+                base_branch: "main".into(),
+                created_at: "t".into(),
+                last_selected_at: None,
+                agent: Some("pi".into()),
+            },
+        );
+        assert_eq!(get_session_by_name(&conn, "new").unwrap().agent.as_deref(), Some("pi"));
+        assert!(get_sessions(&conn).iter().any(|s| s.name == "new" && s.agent.as_deref() == Some("pi")));
     }
 }

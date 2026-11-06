@@ -1,5 +1,6 @@
 // trellis/src/git.rs
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug)]
@@ -20,6 +21,42 @@ fn run(args: &[&str], cwd: Option<&str>) -> std::process::Output {
         cmd.current_dir(dir);
     }
     cmd.output().expect("failed to execute git")
+}
+
+/// How many directory levels below a repos dir are searched for repos.
+pub const REPO_SCAN_DEPTH: usize = 2;
+
+/// Git repos under `root`, descending into non-repo directories up to
+/// `max_depth` levels. Hidden dirs, `worktrees` and `skip` are not searched.
+pub fn find_repos(root: &Path, skip: &Path, max_depth: usize) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    collect_repos(root, skip, max_depth, &mut found);
+    found
+}
+
+fn collect_repos(dir: &Path, skip: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name();
+        if !path.is_dir()
+            || path == skip
+            || name == "worktrees"
+            || name.to_string_lossy().starts_with('.')
+        {
+            continue;
+        }
+        if path.join(".git").exists() {
+            found.push(path);
+        } else {
+            collect_repos(&path, skip, depth - 1, found);
+        }
+    }
 }
 
 pub fn detect_default_branch(repo_path: &str) -> Result<String, GitError> {
@@ -142,7 +179,7 @@ pub fn create_worktree(
         }
     }
     let output = run(
-        &["worktree", "add", "-b", branch, worktree_path, base_branch],
+        &["worktree", "add", "--no-track", "-b", branch, worktree_path, base_branch],
         Some(repo_path),
     );
     if !output.status.success() {
@@ -225,16 +262,33 @@ pub fn get_pr_branch(repo_path: &str, pr_number: i64) -> Result<String, GitError
     Ok(branch)
 }
 
-pub fn fetch_and_pull(repo_path: &str, branch: &str) -> Result<(), GitError> {
+pub fn fetch_origin(repo_path: &str) -> Result<(), GitError> {
     let fetch = run(&["fetch", "origin"], Some(repo_path));
     if !fetch.status.success() {
         let stderr = String::from_utf8_lossy(&fetch.stderr).trim().to_string();
         return Err(GitError(format!("git fetch failed: {}", stderr)));
     }
-    let pull = run(&["pull", "origin", branch], Some(repo_path));
-    if !pull.status.success() {
-        let stderr = String::from_utf8_lossy(&pull.stderr).trim().to_string();
-        return Err(GitError(format!("git pull failed: {}", stderr)));
+    Ok(())
+}
+
+/// Fast-forward local `branch` to `origin/<branch>` (call after `fetch_origin`)
+/// without ever merging into some other branch. If `branch` is checked out
+/// somewhere, fast-forward it there; otherwise move the ref directly.
+pub fn fast_forward_branch(repo_path: &str, branch: &str) -> Result<(), GitError> {
+    let checked_out_at = list_worktrees(repo_path)?
+        .into_iter()
+        .find(|wt| wt.branch.as_deref() == Some(branch))
+        .map(|wt| wt.path);
+    let output = match checked_out_at {
+        Some(path) => run(&["merge", "--ff-only", &format!("origin/{}", branch)], Some(&path)),
+        None => run(&["fetch", "origin", &format!("{0}:{0}", branch)], Some(repo_path)),
+    };
+    if !output.status.success() {
+        return Err(GitError(format!(
+            "could not fast-forward '{}': {}",
+            branch,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
     Ok(())
 }
@@ -277,7 +331,7 @@ pub fn has_remote_branch(repo_path: &str, branch: &str) -> Result<bool, GitError
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
     use std::process::Command;
@@ -331,5 +385,114 @@ mod tests {
 
         let listed = list_worktrees(repo.to_str().unwrap()).unwrap();
         assert!(listed.iter().any(|w| w.branch.as_deref() == Some("feat-existing")));
+    }
+
+    fn make_repos(root: &std::path::Path, dirs: &[&str]) {
+        for d in dirs {
+            fs::create_dir_all(root.join(d).join(".git")).unwrap();
+        }
+    }
+
+    #[test]
+    fn find_repos_descends_into_container_dirs_but_not_into_repos() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_repos(tmp.path(), &["top", "group/nested", "top/inner"]);
+        let mut found = find_repos(tmp.path(), std::path::Path::new("/nonexistent"), REPO_SCAN_DEPTH);
+        found.sort();
+        assert_eq!(found, vec![tmp.path().join("group/nested"), tmp.path().join("top")]);
+    }
+
+    #[test]
+    fn find_repos_respects_depth_skip_and_hidden() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_repos(tmp.path(), &["a/b/c", "skipme/x", ".hidden/y", "worktrees/z"]);
+        let skip = tmp.path().join("skipme");
+        assert!(find_repos(tmp.path(), &skip, REPO_SCAN_DEPTH).is_empty());
+        assert_eq!(find_repos(tmp.path(), &skip, 3), vec![tmp.path().join("a/b/c")]);
+    }
+
+    pub(crate) fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A repo on `main` whose `origin` is a bare clone that has since moved
+    /// one commit ahead. Returns (repo, origin tip sha).
+    pub(crate) fn repo_behind_origin(root: &std::path::Path) -> (std::path::PathBuf, String) {
+        let root = root.canonicalize().unwrap();
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let origin = root.join("origin.git");
+        git_out(&root, &["clone", "-q", "--bare", repo.to_str().unwrap(), origin.to_str().unwrap()]);
+        git_out(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+
+        let pusher = root.join("pusher");
+        git_out(&root, &["clone", "-q", origin.to_str().unwrap(), pusher.to_str().unwrap()]);
+        git_out(&pusher, &["config", "user.email", "t@t"]);
+        git_out(&pusher, &["config", "user.name", "t"]);
+        git_out(&pusher, &["commit", "--allow-empty", "-qm", "ahead"]);
+        git_out(&pusher, &["push", "-q", "origin", "main"]);
+        let tip = git_out(&pusher, &["rev-parse", "HEAD"]);
+        fetch_origin(repo.to_str().unwrap()).unwrap();
+        (repo, tip)
+    }
+
+    #[test]
+    fn fast_forward_moves_main_without_touching_the_checked_out_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, tip) = repo_behind_origin(tmp.path());
+        git_out(&repo, &["checkout", "-q", "-b", "work"]);
+        let work_before = git_out(&repo, &["rev-parse", "work"]);
+
+        fast_forward_branch(repo.to_str().unwrap(), "main").unwrap();
+
+        assert_eq!(git_out(&repo, &["rev-parse", "main"]), tip);
+        assert_eq!(git_out(&repo, &["rev-parse", "work"]), work_before);
+        assert_eq!(git_out(&repo, &["branch", "--show-current"]), "work");
+    }
+
+    #[test]
+    fn fast_forward_updates_main_when_it_is_the_checked_out_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, tip) = repo_behind_origin(tmp.path());
+        fast_forward_branch(repo.to_str().unwrap(), "main").unwrap();
+        assert_eq!(git_out(&repo, &["rev-parse", "HEAD"]), tip);
+    }
+
+    #[test]
+    fn fast_forward_updates_main_checked_out_in_another_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, tip) = repo_behind_origin(tmp.path());
+        git_out(&repo, &["checkout", "-q", "-b", "work"]);
+        let wt = tmp.path().canonicalize().unwrap().join("main-wt");
+        git_out(&repo, &["worktree", "add", "-q", wt.to_str().unwrap(), "main"]);
+
+        fast_forward_branch(repo.to_str().unwrap(), "main").unwrap();
+        assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), tip);
+    }
+
+    #[test]
+    fn fast_forward_refuses_diverged_main_and_leaves_it_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, _) = repo_behind_origin(tmp.path());
+        git_out(&repo, &["checkout", "-q", "-b", "work"]);
+        git_out(&repo, &["commit", "--allow-empty", "-qm", "local-only"]);
+        git_out(&repo, &["branch", "-f", "main", "work"]);
+        let before = git_out(&repo, &["rev-parse", "main"]);
+
+        assert!(fast_forward_branch(repo.to_str().unwrap(), "main").is_err());
+        assert_eq!(git_out(&repo, &["rev-parse", "main"]), before);
+    }
+
+    #[test]
+    fn fetch_origin_fails_without_a_reachable_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().canonicalize().unwrap().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        git_out(&repo, &["remote", "add", "origin", "/nonexistent/origin.git"]);
+        assert!(fetch_origin(repo.to_str().unwrap()).is_err());
     }
 }
