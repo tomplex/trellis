@@ -43,23 +43,3 @@ pub struct SessionInfo {
     pub live: bool,
     pub managed: bool,
 }
-
-#[derive(Debug, Clone)]
-pub struct Conversation {
-    pub date: String,
-    pub session_id: String,
-    pub project: String,
-    pub branch: String,
-    pub intents: Vec<String>,
-}
-
-impl Conversation {
-    pub fn summary(&self) -> &str {
-        for intent in &self.intents {
-            if !intent.starts_with("[Request interrupted") {
-                return intent;
-            }
-        }
-        self.intents.first().map(|s| s.as_str()).unwrap_or("")
-    }
-}

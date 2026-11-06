@@ -12,6 +12,7 @@ const CONFIG_KEYS: &[(&str, &str, bool)] = &[
     // (key, label, multiline)
     ("repos_dir", "Repos directories (one path per line)", true),
     ("worktrees_dir", "Worktrees directory", false),
+    ("agent_cmd", "Agent command (pi, omp, claude)", false),
 ];
 
 struct Field {

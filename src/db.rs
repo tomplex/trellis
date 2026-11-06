@@ -31,6 +31,11 @@ pub fn init_db(db_path: &Path) -> Connection {
         ],
     )
     .unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO config (key, value) VALUES (?1, ?2)",
+        params!["agent_cmd", crate::manager::DEFAULT_AGENT_CMD],
+    )
+    .unwrap();
 
     conn
 }

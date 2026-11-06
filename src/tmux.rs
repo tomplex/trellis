@@ -209,7 +209,8 @@ pub struct TmuxWindow {
     pub name: String,
     pub path: String,
     pub command: String,
-    pub pane_pid: String,
+    /// Active pane's id (`%12`); the key agent status files are written under.
+    pub pane_id: String,
 }
 
 pub fn list_all_windows() -> HashMap<String, Vec<TmuxWindow>> {
@@ -217,7 +218,7 @@ pub fn list_all_windows() -> HashMap<String, Vec<TmuxWindow>> {
         "list-windows",
         "-a",
         "-F",
-        "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
+        "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_id}",
     ]);
     if !output.status.success() {
         return HashMap::new();
@@ -238,7 +239,7 @@ pub fn list_all_windows() -> HashMap<String, Vec<TmuxWindow>> {
             name: parts[2].to_string(),
             path: parts[3].to_string(),
             command: parts.get(4).unwrap_or(&"").to_string(),
-            pane_pid: parts.get(5).unwrap_or(&"").to_string(),
+            pane_id: parts.get(5).unwrap_or(&"").to_string(),
         };
         by_session.entry(session).or_default().push(win);
     }
@@ -251,7 +252,7 @@ pub fn list_windows(session: &str) -> Vec<TmuxWindow> {
         "-t",
         session,
         "-F",
-        "#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
+        "#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_id}",
     ]);
     if !output.status.success() {
         return vec![];
@@ -271,7 +272,7 @@ pub fn list_windows(session: &str) -> Vec<TmuxWindow> {
                 name: parts[1].to_string(),
                 path: parts[2].to_string(),
                 command: parts.get(3).unwrap_or(&"").to_string(),
-                pane_pid: parts.get(4).unwrap_or(&"").to_string(),
+                pane_id: parts.get(4).unwrap_or(&"").to_string(),
             })
         })
         .collect()
@@ -295,16 +296,6 @@ pub fn send_keys(target: &str, keys: &[&str]) {
     let mut args = vec!["send-keys", "-t", target];
     args.extend_from_slice(keys);
     run(&args);
-}
-
-pub fn capture_pane(target: &str, lines: i64) -> String {
-    let lines_arg = format!("-{}", lines);
-    let output = run(&["capture-pane", "-t", target, "-p", "-J", "-S", &lines_arg]);
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout).to_string()
-    } else {
-        String::new()
-    }
 }
 
 

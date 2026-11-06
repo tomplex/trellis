@@ -14,11 +14,11 @@ use crate::tmux;
 
 use crate::utils::utc_now;
 
-/// Default tmux layout: (window_name, optional command to send).
-const DEFAULT_LAYOUT: &[(&str, Option<&str>)] = &[
-    ("claude", None),
-    ("shell", None),
-];
+/// Window the agent runs in; second window is a plain shell.
+pub const AGENT_WINDOW: &str = "agent";
+const SHELL_WINDOW: &str = "shell";
+/// Agent launched when `agent_cmd` is unset.
+pub const DEFAULT_AGENT_CMD: &str = "pi";
 
 /// A worktree git knows about that Trellis hasn't registered yet.
 #[derive(Debug, Clone)]
@@ -68,27 +68,21 @@ fn filter_orphans(
     out
 }
 
-/// Create a tmux session and set up windows according to the default layout.
+/// Create a tmux session and set up the default layout: an agent window
+/// running `agent_cmd` and a shell window, both rooted at `working_dir`.
 ///
-/// The first layout entry becomes the session's initial window — named at
+/// The agent window becomes the session's initial window — named at
 /// `tmux new-session` time via `-n`, so we don't depend on tmux's
-/// configurable `base-index`. Subsequent entries become additional windows.
-pub fn apply_layout(session_name: &str, working_dir: &str, claude_cmd: &str) -> Result<(), tmux::TmuxError> {
-    let (first_name, _) = DEFAULT_LAYOUT[0];
-    tmux::new_session(session_name, working_dir, Some(first_name))?;
-    let target = format!("{}:{}", session_name, first_name);
-    tmux::send_keys(&target, &[claude_cmd, "Enter"]);
+/// configurable `base-index`.
+pub fn apply_layout(session_name: &str, working_dir: &str, agent_cmd: &str) -> Result<(), tmux::TmuxError> {
+    tmux::new_session(session_name, working_dir, Some(AGENT_WINDOW))?;
+    let target = format!("{}:{}", session_name, AGENT_WINDOW);
+    tmux::send_keys(&target, &[agent_cmd, "Enter"]);
 
-    for &(name, command) in &DEFAULT_LAYOUT[1..] {
-        let _ = tmux::new_window(session_name, name, Some(working_dir));
-        if let Some(cmd) = command {
-            let target = format!("{}:{}", session_name, name);
-            tmux::send_keys(&target, &[cmd, "Enter"]);
-        }
-    }
+    let _ = tmux::new_window(session_name, SHELL_WINDOW, Some(working_dir));
 
-    // Focus the first window by name (base-index agnostic).
-    let _ = tmux::select_window_by_name(session_name, first_name);
+    // Focus the agent window by name (base-index agnostic).
+    let _ = tmux::select_window_by_name(session_name, AGENT_WINDOW);
     Ok(())
 }
 
@@ -213,6 +207,16 @@ impl Manager {
             .unwrap_or_else(|| dirs::home_dir().unwrap().join("dev").join("worktrees"))
     }
 
+    /// Command that launches the coding agent in a session's agent window.
+    /// Must accept `-c` to continue the most recent conversation for its cwd
+    /// (`pi`, `omp`, and `claude` all do).
+    pub fn agent_cmd(&self) -> String {
+        db::get_config(&self.conn, "agent_cmd")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_AGENT_CMD.to_string())
+    }
+
     fn find_or_create_worktree(
         &self,
         repo: &Repo,
@@ -277,10 +281,10 @@ impl Manager {
             return Err(format!("path '{}' no longer exists", wt_path));
         }
 
-        let claude_cmd = crate::claude_pane::find_latest_conversation(Path::new(&wt_path))
-            .map(|id| format!("claude --resume {}", id))
-            .unwrap_or_else(|| "claude".to_string());
-        apply_layout(&session.name, &wt_path, &claude_cmd)
+        // Pick the conversation back up: every supported agent continues its
+        // most recent session for the cwd with `-c`, and starts fresh if none.
+        let revive_cmd = format!("{} -c", self.agent_cmd());
+        apply_layout(&session.name, &wt_path, &revive_cmd)
             .map_err(|e| format!("Failed to create tmux session: {}", e))?;
         Ok(())
     }
@@ -303,7 +307,7 @@ impl Manager {
         }
 
         // tmux first — fail loudly before touching the DB.
-        apply_layout(&session_name, wt_path, "claude")
+        apply_layout(&session_name, wt_path, &self.agent_cmd())
             .map_err(|e| format!("Failed to create tmux session: {}", e))?;
 
         let session = db::add_session(
@@ -362,12 +366,6 @@ impl Manager {
         db::get_sessions(&self.conn)
             .into_iter()
             .find(|s| s.id == Some(session_id))
-    }
-
-    fn get_worktree_by_id(&self, worktree_id: i64) -> Option<Worktree> {
-        db::get_worktrees(&self.conn)
-            .into_iter()
-            .find(|wt| wt.id == Some(worktree_id))
     }
 
     fn get_or_create_repo(&self, repo_path: &str) -> Repo {
@@ -448,7 +446,7 @@ impl Manager {
         };
 
         // tmux first — fail loudly before touching the DB.
-        apply_layout(&chosen_name, &effective_dir, "claude")
+        apply_layout(&chosen_name, &effective_dir, &self.agent_cmd())
             .map_err(|e| format!("Failed to create tmux session: {}", e))?;
 
         let session = db::add_session(
@@ -551,13 +549,10 @@ impl Manager {
 
     /// Create or reuse worktree + session for a PR number or branch, ready
     /// for review. Returns (session, worktree_path).
-    pub fn checkout_and_review(
-        &self,
-        repo_path: &str,
-        pr_or_branch: &str,
-    ) -> Result<(Session, String), String> {
-        let repo = self.get_or_create_repo(repo_path);
-
+    /// The network half of a PR review: resolve a PR number to its branch via
+    /// `gh`, then fetch it. Two round trips, so callers run this on a worker —
+    /// it needs no connection, only paths.
+    pub fn resolve_review_branch(repo_path: &str, pr_or_branch: &str) -> Result<String, String> {
         let branch = if pr_or_branch.chars().all(|c| c.is_ascii_digit()) && !pr_or_branch.is_empty() {
             let pr_num: i64 = pr_or_branch.parse().unwrap();
             git::get_pr_branch(repo_path, pr_num).map_err(|e| format!("Failed to get PR branch: {}", e))?
@@ -566,12 +561,22 @@ impl Manager {
         };
 
         git::fetch_branch(repo_path, &branch);
+        Ok(branch)
+    }
+
+    /// The local half, once the branch is fetched: worktree, session and db rows.
+    pub fn checkout_and_review(
+        &self,
+        repo_path: &str,
+        branch: &str,
+    ) -> Result<(Session, String), String> {
+        let repo = self.get_or_create_repo(repo_path);
 
         // PR review roots the new local branch at the PR's HEAD on the remote,
         // not main — preserves the original `checkout_and_review` semantic.
         let start_point = format!("origin/{}", branch);
-        let wt_path = self.find_or_create_worktree(&repo, &branch, &start_point)?;
-        let session = self.find_or_create_session(&repo, &branch, &wt_path)?;
+        let wt_path = self.find_or_create_worktree(&repo, branch, &start_point)?;
+        let session = self.find_or_create_session(&repo, branch, &wt_path)?;
         Ok((session, wt_path))
     }
 
@@ -620,7 +625,7 @@ impl Manager {
         branch: &str,
         session_name: &str,
     ) -> Result<Session, String> {
-        apply_layout(session_name, path, "claude")
+        apply_layout(session_name, path, &self.agent_cmd())
             .map_err(|e| format!("Failed to create tmux session: {}", e))?;
         Ok(self.persist_adopted_worktree(repo_id, path, branch, session_name))
     }
@@ -693,33 +698,19 @@ impl Manager {
         Ok(())
     }
 
-    /// Remove git worktree and delete DB record.
-    pub fn cleanup_worktree(&self, worktree_id: i64) -> Result<(), String> {
-        let wt = self
-            .get_worktree_by_id(worktree_id)
-            .ok_or_else(|| format!("Worktree {} not found", worktree_id))?;
-
-        let repo = self
-            .get_repo_by_id(wt.repo_id)
-            .ok_or_else(|| format!("Repo {} not found", wt.repo_id))?;
-
-        // Try to remove the git worktree; if it fails (e.g. directory already gone),
-        // still delete the DB record
-        if let Err(e) = git::remove_worktree(&repo.path, &wt.path) {
-            // If the directory doesn't exist, just clean up the DB record
-            if std::path::Path::new(&wt.path).exists() {
-                return Err(format!("Failed to remove worktree: {}", e));
-            }
-        }
+    /// Drop the DB record for a worktree. The git removal is the slow half and
+    /// runs on a worker thread; this is the commit the main thread applies once
+    /// the worker reports the directory is gone.
+    pub fn forget_worktree(&self, worktree_id: i64) {
         db::delete_worktree(&self.conn, worktree_id);
-
-        Ok(())
     }
 
     /// Return DB sessions enriched with live tmux state, plus unmanaged live sessions.
-    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+    /// Enrich the db's sessions with live tmux state, plus any live sessions the
+    /// db doesn't know about. Takes an already-gathered tmux listing so the
+    /// process spawn happens on a worker, not the event loop.
+    pub fn list_sessions_with(&self, live_list: &[tmux::TmuxSession]) -> Vec<SessionInfo> {
         let db_sessions = db::get_sessions(&self.conn);
-        let live_list = tmux::list_sessions();
         let live_by_name: HashMap<String, &tmux::TmuxSession> = live_list
             .iter()
             .map(|s| (s.name.clone(), s))
@@ -745,7 +736,7 @@ impl Manager {
         }
 
         // Include live tmux sessions not tracked in the DB
-        for ts in &live_list {
+        for ts in live_list {
             if !db_names.contains(&ts.name) {
                 result.push(SessionInfo {
                     id: None,
@@ -1361,6 +1352,29 @@ mod reuse_tests {
     }
 
     #[test]
+    fn review_input_that_is_not_a_pr_number_is_used_as_the_branch_verbatim() {
+        let tmp = tempdir().unwrap();
+        let (repo_path, _) = make_repo(tmp.path());
+
+        // Non-numeric input must not be sent to `gh`; it is already a branch.
+        // The fetch that follows is best-effort and fails silently with no remote.
+        let branch = Manager::resolve_review_branch(&repo_path, "feat/some-branch").unwrap();
+
+        assert_eq!(branch, "feat/some-branch");
+    }
+
+    #[test]
+    fn review_input_with_a_slash_is_never_treated_as_a_pr_number() {
+        let tmp = tempdir().unwrap();
+        let (repo_path, _) = make_repo(tmp.path());
+
+        // Guards the digit test against matching things like "123/foo".
+        let branch = Manager::resolve_review_branch(&repo_path, "123/foo").unwrap();
+
+        assert_eq!(branch, "123/foo");
+    }
+
+    #[test]
     fn find_or_create_session_inserts_when_missing() {
         let tmp = tempdir().unwrap();
         let (repo_path, _) = make_repo(tmp.path());
@@ -1446,19 +1460,19 @@ mod reuse_tests {
     fn apply_layout_creates_named_windows_independent_of_base_index() {
         // The bug we're fixing: hardcoded window index 1 in rename_window
         // silently failed on default tmux (base-index 0), leaving the first
-        // window with tmux's default name ("zsh") instead of "claude".
-        // The fix passes -n claude at new-session time, so the first window
-        // is correctly named regardless of base-index.
+        // window with tmux's default name ("zsh") instead of the agent window.
+        // The fix passes -n at new-session time, so the first window is
+        // correctly named regardless of base-index.
         let tmp = tempdir().unwrap();
         let session_name = format!("trellistest-layout-{}", std::process::id());
         let _guard = SessionGuard(session_name.clone());
 
-        apply_layout(&session_name, &tmp.path().to_string_lossy(), "claude").unwrap();
+        apply_layout(&session_name, &tmp.path().to_string_lossy(), "true").unwrap();
         assert!(crate::tmux::session_exists(&session_name));
 
         let windows = crate::tmux::list_windows(&session_name);
         let names: Vec<String> = windows.iter().map(|w| w.name.clone()).collect();
-        assert_eq!(names, vec!["claude".to_string(), "shell".to_string()]);
+        assert_eq!(names, vec![AGENT_WINDOW.to_string(), "shell".to_string()]);
     }
 
     #[test]
