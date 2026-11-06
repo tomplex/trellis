@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::manager::Manager;
 use crate::models::Repo;
+use super::path_complete::PathCompleter;
 use super::rename::{input_handle_key, render_input, render_modal_box};
 use super::{ScreenAction, ScreenBehavior};
 use super::theme;
@@ -39,6 +40,7 @@ pub struct AdoptSessionScreen {
     filtered_repos: Vec<usize>, // indices into repos
     repo_list_state: ListState,
     awaiting_repo_path: bool,
+    path_completer: PathCompleter,
 
     // Branch step
     branches: Vec<String>,
@@ -71,6 +73,7 @@ impl AdoptSessionScreen {
             filtered_repos,
             repo_list_state,
             awaiting_repo_path: false,
+            path_completer: PathCompleter::default(),
             branches: Vec::new(),
             filtered_branches: Vec::new(),
             branch_list_state: ListState::default(),
@@ -440,6 +443,10 @@ impl ScreenBehavior for AdoptSessionScreen {
             f.render_stateful_widget(list, chunks[4], &mut state);
         }
 
+        if self.awaiting_repo_path {
+            self.path_completer.render(f, chunks[4]);
+        }
+
         // Error
         if !self.error.is_empty() {
             let err = Paragraph::new(Span::styled(&self.error[..], theme::style_error()))
@@ -450,6 +457,9 @@ impl ScreenBehavior for AdoptSessionScreen {
 
     fn handle_event(&mut self, event: &Event, manager: &mut Manager) -> ScreenAction {
         if let Event::Key(KeyEvent { code, kind: KeyEventKind::Press, modifiers, .. }) = event {
+            if !matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+                self.path_completer.reset();
+            }
             match code {
                 KeyCode::Esc => {
                     if self.awaiting_repo_path {
@@ -491,13 +501,17 @@ impl ScreenBehavior for AdoptSessionScreen {
                     return ScreenAction::None;
                 }
                 KeyCode::Tab => {
-                    if !self.awaiting_repo_path {
+                    if self.awaiting_repo_path {
+                        self.path_completer.complete(&mut self.filter_input, &mut self.filter_cursor, false);
+                    } else {
                         self.move_selection(1);
                     }
                     return ScreenAction::None;
                 }
                 KeyCode::BackTab => {
-                    if !self.awaiting_repo_path {
+                    if self.awaiting_repo_path {
+                        self.path_completer.complete(&mut self.filter_input, &mut self.filter_cursor, true);
+                    } else {
                         self.move_selection(-1);
                     }
                     return ScreenAction::None;

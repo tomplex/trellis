@@ -196,6 +196,34 @@ mod tests {
         assert!(bg_matches_cursor, "cursor cell at col 3 has bg {:?}, expected {:?}; symbol: {:?}",
             cursor_cell.bg, theme::CURSOR_BG, cursor_cell.symbol());
     }
+
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|sp| sp.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn footer_lines_keep_every_binding_whole_and_within_width() {
+        let bindings = [("q", "Quit"), ("enter", "Switch"), ("h/l", "Collapse/Expand"), ("S", "Settings")];
+        for width in [20u16, 30, 45, 200] {
+            let lines = footer_lines(&bindings, width);
+            let joined: Vec<String> = lines.iter().map(line_text).collect();
+            for line in &joined {
+                assert!(line.chars().count() <= width as usize, "{:?} exceeds {}", line, width);
+            }
+            let all = joined.join("  ");
+            let mut at = 0;
+            for (k, d) in &bindings {
+                let pair = format!("{} {}", k, d);
+                at += all[at..].find(&pair).expect("binding split or missing");
+            }
+        }
+    }
+
+    #[test]
+    fn footer_lines_use_one_line_when_everything_fits() {
+        assert_eq!(footer_lines(&[("q", "Quit"), ("?", "Help")], 80).len(), 1);
+        assert!(footer_lines(&[("q", "Quit"), ("?", "Help")], 10).len() > 1);
+    }
 }
 
 /// Render the centered modal box and return the inner area.
@@ -242,6 +270,30 @@ pub fn render_footer_bindings<'a>(bindings: &[(&'a str, &'a str)]) -> Paragraph<
         spans.push(Span::styled(format!(" {}", desc), theme::style_footer()));
     }
     Paragraph::new(Line::from(spans)).style(theme::style_footer())
+}
+
+/// Pack footer bindings into as many lines as `width` needs, never splitting a
+/// `key desc` pair across lines.
+pub fn footer_lines<'a>(bindings: &[(&'a str, &'a str)], width: u16) -> Vec<Line<'a>> {
+    let width = width.max(1) as usize;
+    let mut lines: Vec<Vec<Span<'a>>> = vec![Vec::new()];
+    let mut used = 0;
+    for (key, desc) in bindings {
+        let item_width = key.chars().count() + 1 + desc.chars().count();
+        if used > 0 && used + 2 + item_width > width {
+            lines.push(Vec::new());
+            used = 0;
+        }
+        let line = lines.last_mut().expect("lines starts non-empty");
+        if used > 0 {
+            line.push(Span::styled("  ", theme::style_footer()));
+            used += 2;
+        }
+        line.push(Span::styled(*key, theme::style_footer_key()));
+        line.push(Span::styled(format!(" {}", desc), theme::style_footer()));
+        used += item_width;
+    }
+    lines.into_iter().map(Line::from).collect()
 }
 
 // ---------------------------------------------------------------------------

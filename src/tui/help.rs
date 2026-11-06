@@ -45,8 +45,8 @@ fn help_lines() -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("h", Style::default().fg(theme::ACCENT)),
-            Span::styled("         Conversation history", Style::default().fg(theme::TEXT)),
+            Span::styled("H", Style::default().fg(theme::ACCENT)),
+            Span::styled("         Resume a past conversation", Style::default().fg(theme::TEXT)),
         ]),
         Line::from(vec![
             Span::raw("  "),
@@ -70,7 +70,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ]),
         Line::from(""),
         Line::from(Span::styled("Actions menu (.)", Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled("  Rename, change branch, launch claude,", Style::default().fg(theme::TEXT))),
+        Line::from(Span::styled("  Rename, change branch, launch agent,", Style::default().fg(theme::TEXT))),
         Line::from(Span::styled("  adopt, cleanup, settings", Style::default().fg(theme::TEXT))),
         Line::from(""),
         Line::from(Span::styled("Cleanup View", Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD))),

@@ -4,22 +4,26 @@ mod db;
 mod tmux;
 mod git;
 mod manager;
-mod claude_pane;
-mod conversation_index;
+mod agent_pane;
 mod fuzzy;
 mod switch;
 mod utils;
+mod notify;
 mod tui;
 
 fn main() {
-    switch::cleanup();
-
     // DB path: ~/.local/share/trellis/trellis.db
     let db_path = dirs::home_dir()
         .expect("no home dir")
         .join(".local/share/trellis/trellis.db");
     let first_run = !db_path.exists();
     let conn = db::init_db(&db_path);
+    // Hook mode: no TUI, and no switch-file cleanup (a popup may be mid-switch).
+    if std::env::args().nth(1).as_deref() == Some("notify") {
+        notify::run(&conn);
+        return;
+    }
+    switch::cleanup();
     let mgr = manager::Manager::new(conn);
 
     let mut terminal = ratatui::init();

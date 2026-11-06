@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use crate::git;
 use crate::manager::{self, Manager};
 use crate::tmux;
+use super::path_complete::PathCompleter;
 use super::rename::{input_handle_key, render_input, render_modal_box};
 use super::{ScreenAction, ScreenBehavior};
 use super::theme;
@@ -19,11 +20,22 @@ use super::theme;
 enum Step {
     PickRepo,
     PickBranch,
+    PickAgent,
     PickSubsystem,
 }
 
 // ---------------------------------------------------------------------------
 use super::SelectedRepo;
+
+/// Agents offered in the wizard: the configured default plus the built-in
+/// choices, default first only if it isn't already one of them.
+fn agent_choices(default: &str) -> Vec<String> {
+    let mut agents: Vec<String> = ["claude", "pi"].iter().map(|a| a.to_string()).collect();
+    if !agents.iter().any(|a| a == default) {
+        agents.insert(0, default.to_string());
+    }
+    agents
+}
 
 // ---------------------------------------------------------------------------
 // NewSessionScreen
@@ -37,11 +49,16 @@ pub struct NewSessionScreen {
     filtered_dirs: Vec<(String, String)>,
     repo_list_state: ListState,
     awaiting_repo_path: bool,
+    path_completer: PathCompleter,
 
     // Branch step
     branches: Vec<String>,
     filtered_branches: Vec<String>,
     branch_list_state: ListState,
+
+    // Agent step
+    agents: Vec<String>,
+    agent_list_state: ListState,
 
     // Subsystem step
     subsystems: Vec<String>,
@@ -51,6 +68,7 @@ pub struct NewSessionScreen {
     // Selections
     selected_repo: Option<SelectedRepo>,
     selected_branch: Option<String>,
+    selected_agent: Option<String>,
     session_name: String,
 
     // Shared input state
@@ -76,20 +94,9 @@ impl NewSessionScreen {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let entries: Vec<_> = std::fs::read_dir(repos_dir)
-                .into_iter()
-                .flatten()
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path().is_dir()
-                        && e.path() != worktrees_dir
-                        && !e.file_name().to_string_lossy().starts_with('.')
-                })
-                .collect();
-            for entry in entries {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let path = entry.path().to_string_lossy().to_string();
-                raw.push((name, path, parent_label.clone()));
+            for path in git::find_repos(repos_dir, &worktrees_dir, git::REPO_SCAN_DEPTH) {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                raw.push((name, path.to_string_lossy().to_string(), parent_label.clone()));
             }
         }
 
@@ -126,14 +133,18 @@ impl NewSessionScreen {
             filtered_dirs,
             repo_list_state,
             awaiting_repo_path: false,
+            path_completer: PathCompleter::default(),
             branches: Vec::new(),
             filtered_branches: Vec::new(),
             branch_list_state: ListState::default(),
+            agents: Vec::new(),
+            agent_list_state: ListState::default(),
             subsystems: Vec::new(),
             filtered_subsystems: Vec::new(),
             subsystem_list_state: ListState::default(),
             selected_repo: None,
             selected_branch: None,
+            selected_agent: None,
             session_name: String::new(),
             filter_input: String::new(),
             filter_cursor: 0,
@@ -176,6 +187,23 @@ impl NewSessionScreen {
 
     fn advance_after_branch(&mut self, manager: &Manager) -> ScreenAction {
         self.session_name = self.auto_session_name(manager);
+        let default_agent = manager.agent_cmd();
+        self.agents = agent_choices(&default_agent);
+        self.agent_list_state = ListState::default();
+        self.agent_list_state
+            .select(self.agents.iter().position(|a| *a == default_agent));
+        self.go_to_agent_step();
+        ScreenAction::None
+    }
+
+    fn go_to_agent_step(&mut self) {
+        self.step = Step::PickAgent;
+        self.filter_input.clear();
+        self.filter_cursor = 0;
+        self.error.clear();
+    }
+
+    fn advance_after_agent(&mut self, manager: &Manager) -> ScreenAction {
         let repo = self.selected_repo.as_ref().unwrap();
         self.subsystems = manager::detect_subsystems(&repo.path);
         if !self.subsystems.is_empty() {
@@ -248,9 +276,12 @@ impl NewSessionScreen {
 
         let subdir_ref = subdirectory.as_deref();
 
-        match manager.create_session(&repo.path, branch, &self.session_name, subdir_ref) {
-            Ok(_) => {
+        match manager.create_session(&repo.path, branch, &self.session_name, subdir_ref, self.selected_agent.as_deref()) {
+            Ok((_, warning)) => {
                 let _ = tmux::switch_client(&self.session_name);
+                if let Some(w) = warning {
+                    tmux::display_message(&self.session_name, &format!("trellis: {w}"));
+                }
                 ScreenAction::Quit
             }
             Err(e) => {
@@ -329,6 +360,7 @@ impl NewSessionScreen {
                     self.branch_list_state.select(Some(0));
                 }
             }
+            Step::PickAgent => {}
             Step::PickSubsystem => {
                 let mut scored: Vec<(String, i32)> = self
                     .subsystems
@@ -361,6 +393,7 @@ impl NewSessionScreen {
                 };
                 self.filtered_branches.len() + extra
             }
+            Step::PickAgent => self.agents.len(),
             Step::PickSubsystem => self.filtered_subsystems.len() + 1, // +1 for root
         }
     }
@@ -369,6 +402,7 @@ impl NewSessionScreen {
         match self.step {
             Step::PickRepo => self.repo_list_state.selected(),
             Step::PickBranch => self.branch_list_state.selected(),
+            Step::PickAgent => self.agent_list_state.selected(),
             Step::PickSubsystem => self.subsystem_list_state.selected(),
         }
     }
@@ -377,6 +411,7 @@ impl NewSessionScreen {
         match self.step {
             Step::PickRepo => self.repo_list_state.select(Some(idx)),
             Step::PickBranch => self.branch_list_state.select(Some(idx)),
+            Step::PickAgent => self.agent_list_state.select(Some(idx)),
             Step::PickSubsystem => self.subsystem_list_state.select(Some(idx)),
         }
     }
@@ -399,6 +434,7 @@ impl NewSessionScreen {
         match self.step {
             Step::PickRepo => self.confirm_repo(manager),
             Step::PickBranch => self.confirm_branch(manager),
+            Step::PickAgent => self.confirm_agent(manager),
             Step::PickSubsystem => self.confirm_subsystem(manager),
         }
     }
@@ -441,6 +477,12 @@ impl NewSessionScreen {
         self.advance_after_branch(manager)
     }
 
+    fn confirm_agent(&mut self, manager: &Manager) -> ScreenAction {
+        let idx = self.agent_list_state.selected().unwrap_or(0);
+        self.selected_agent = self.agents.get(idx).cloned();
+        self.advance_after_agent(manager)
+    }
+
     fn confirm_subsystem(&mut self, manager: &Manager) -> ScreenAction {
         // Index 0 = root, 1+ = subsystem entries
         self.create_session(manager)
@@ -457,9 +499,13 @@ impl NewSessionScreen {
                 let repo_name = self.selected_repo.as_ref().map(|r| r.name.as_str()).unwrap_or("?");
                 format!("Step 2 - Select Branch ({})", repo_name)
             }
+            Step::PickAgent => {
+                let repo_name = self.selected_repo.as_ref().map(|r| r.name.as_str()).unwrap_or("?");
+                format!("Step 3 - Agent ({})", repo_name)
+            }
             Step::PickSubsystem => {
                 let repo_name = self.selected_repo.as_ref().map(|r| r.name.as_str()).unwrap_or("?");
-                format!("Step 3 - Working Directory ({})", repo_name)
+                format!("Step 4 - Working Directory ({})", repo_name)
             }
         }
     }
@@ -471,6 +517,7 @@ impl NewSessionScreen {
         match self.step {
             Step::PickRepo => "Type to filter. Enter to select. Escape to cancel.",
             Step::PickBranch => "Type to filter or enter a new branch name. Enter to confirm.",
+            Step::PickAgent => "Pick the agent to launch. Enter to confirm. Escape to go back.",
             Step::PickSubsystem => "Pick a subsystem to start in, or select root. Enter to confirm.",
         }
     }
@@ -482,6 +529,7 @@ impl NewSessionScreen {
         match self.step {
             Step::PickRepo => "Filter repos...",
             Step::PickBranch => "Filter or type a new branch...",
+            Step::PickAgent => "",
             Step::PickSubsystem => "Filter...",
         }
     }
@@ -528,6 +576,11 @@ impl NewSessionScreen {
                 }
                 items
             }
+            Step::PickAgent => self
+                .agents
+                .iter()
+                .map(|a| ListItem::new(Span::styled(a.as_str(), Style::default().fg(theme::TEXT))))
+                .collect(),
             Step::PickSubsystem => {
                 let mut items: Vec<ListItem> = Vec::new();
                 items.push(ListItem::new(Span::styled(
@@ -588,6 +641,7 @@ impl ScreenBehavior for NewSessionScreen {
             let list_state = match self.step {
                 Step::PickRepo => &self.repo_list_state,
                 Step::PickBranch => &self.branch_list_state,
+                Step::PickAgent => &self.agent_list_state,
                 Step::PickSubsystem => &self.subsystem_list_state,
             };
 
@@ -609,6 +663,10 @@ impl ScreenBehavior for NewSessionScreen {
             f.render_stateful_widget(list, chunks[4], &mut state);
         }
 
+        if self.awaiting_repo_path {
+            self.path_completer.render(f, chunks[4]);
+        }
+
         // Error
         if !self.error.is_empty() {
             let err = Paragraph::new(Span::styled(&self.error[..], theme::style_error()))
@@ -619,6 +677,9 @@ impl ScreenBehavior for NewSessionScreen {
 
     fn handle_event(&mut self, event: &Event, manager: &mut Manager) -> ScreenAction {
         if let Event::Key(KeyEvent { code, kind: KeyEventKind::Press, modifiers, .. }) = event {
+            if !matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+                self.path_completer.reset();
+            }
             match code {
                 KeyCode::Esc => {
                     if self.awaiting_repo_path {
@@ -640,9 +701,12 @@ impl ScreenBehavior for NewSessionScreen {
                             self.go_to_repo_step();
                             return ScreenAction::None;
                         }
-                        Step::PickSubsystem => {
-                            // Skip back to branch (not name step)
+                        Step::PickAgent => {
                             self.go_to_branch_step();
+                            return ScreenAction::None;
+                        }
+                        Step::PickSubsystem => {
+                            self.go_to_agent_step();
                             return ScreenAction::None;
                         }
                     }
@@ -666,13 +730,17 @@ impl ScreenBehavior for NewSessionScreen {
                     return ScreenAction::None;
                 }
                 KeyCode::Tab => {
-                    if !self.awaiting_repo_path {
+                    if self.awaiting_repo_path {
+                        self.path_completer.complete(&mut self.filter_input, &mut self.filter_cursor, false);
+                    } else {
                         self.move_selection(1);
                     }
                     return ScreenAction::None;
                 }
                 KeyCode::BackTab => {
-                    if !self.awaiting_repo_path {
+                    if self.awaiting_repo_path {
+                        self.path_completer.complete(&mut self.filter_input, &mut self.filter_cursor, true);
+                    } else {
                         self.move_selection(-1);
                     }
                     return ScreenAction::None;
@@ -709,7 +777,17 @@ impl ScreenBehavior for NewSessionScreen {
 
 #[cfg(test)]
 mod tests {
+    use super::agent_choices;
     use crate::fuzzy::fuzzy_match_multi;
+
+    #[test]
+    fn agent_choices_always_include_the_default_exactly_once() {
+        for default in ["claude", "pi", "omp"] {
+            let agents = agent_choices(default);
+            assert_eq!(agents.iter().filter(|a| *a == default).count(), 1);
+            assert!(agents.contains(&"claude".to_string()) && agents.contains(&"pi".to_string()));
+        }
+    }
 
     /// Helper that mirrors what the picker's filter does post-change.
     fn rank(query: &str, items: &[&str]) -> Vec<String> {
